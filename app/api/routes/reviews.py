@@ -61,6 +61,12 @@ class BatchRequest(APIModel):
     reason: str | None = None
 
 
+class ReapplyRulesRequest(APIModel):
+    expected_revision: int = Field(ge=1)
+    source: str = Field(default="original", pattern="^(original|current)$")
+    confirm_reject: bool = False
+
+
 def _review_svc(ctx: AppContext) -> ReviewService:
     return ReviewService(ctx.session_factory)
 
@@ -165,6 +171,34 @@ async def get_review(
             ],
         }
     )
+
+
+@router.post("/{task_id}/reapply-rules", response_model=Envelope[dict[str, Any]])
+async def reapply_rules(
+    task_id: int,
+    body: ReapplyRulesRequest,
+    user: ReviewerUser,
+    ctx: Annotated[AppContext, Depends(get_ctx)],
+) -> Envelope[dict[str, Any]]:
+    svc = _review_svc(ctx)
+    try:
+        task, preview = await svc.reapply_rules(
+            task_id,
+            user_id=user.id,
+            expected_revision=body.expected_revision,
+            source=body.source,
+            confirm_reject=body.confirm_reject,
+        )
+    except ReviewConflictError as exc:
+        raise AppError("conflict", exc.message, status_code=409) from exc
+    except LookupError as exc:
+        raise AppError("not_found", str(exc), status_code=404) from exc
+    except (IllegalTransitionError, ValueError) as exc:
+        raise AppError("invalid_state", str(exc), status_code=400) from exc
+    data: dict[str, Any] = {"preview": preview}
+    if task is not None:
+        data["task"] = ReviewOut.model_validate(task).model_dump(mode="json")
+    return Envelope(data=data)
 
 
 @router.post("/{task_id}/edit", response_model=Envelope[ReviewOut])

@@ -16,7 +16,10 @@ from app.review.state_machine import (
     ReviewStatus,
     assert_transition,
 )
+from app.rules.engine import apply_rules
+from app.rules.loader import load_enabled_rules
 from app.schemas.message import NormalizedMessage
+from app.services.rules_service import RulesService
 
 logger = get_logger(__name__)
 
@@ -277,6 +280,108 @@ class ReviewService:
             await session.commit()
             await session.refresh(task)
             return task
+
+    async def reapply_rules(
+        self,
+        task_id: int,
+        *,
+        user_id: int,
+        expected_revision: int,
+        source: str = "original",
+        confirm_reject: bool = False,
+    ) -> tuple[ReviewTask | None, dict[str, Any]]:
+        """Re-run current enabled rules. Returns (task, preview). task is None if confirm needed."""
+        async with self.session_factory() as session:
+            task = await session.get(ReviewTask, task_id)
+            if task is None:
+                raise LookupError("review task not found")
+            if task.revision != expected_revision:
+                raise ReviewConflictError()
+            status = ReviewStatus(task.status)
+            if status not in {
+                ReviewStatus.PENDING,
+                ReviewStatus.EDITING,
+                ReviewStatus.FAILED,
+            }:
+                raise ValueError(f"cannot reapply rules when status is {status.value}")
+
+            base_text = task.final_text if source == "current" else task.original_text
+
+            rules = await load_enabled_rules(session)
+            applied = apply_rules(
+                base_text,
+                rules,
+                source_chat_id=task.source_chat_id,
+                target_chat_id=task.target_chat_id,
+                media_type=task.media_type,
+            )
+            preview = {
+                "source": source,
+                "input_text": base_text,
+                "final_text": applied.text,
+                "hits": applied.hits,
+                "require_review": applied.require_review,
+                "reject": applied.reject,
+                "reject_reason": applied.reject_reason,
+                "flagged": applied.flagged,
+                "tags": applied.tags,
+            }
+            if applied.reject and not confirm_reject:
+                return None, {**preview, "needs_confirm": True}
+
+            old = status
+            if applied.reject:
+                assert_transition(old, ReviewStatus.REJECTED)
+                task.status = ReviewStatus.REJECTED.value
+                task.rejected_at = datetime.now(UTC)
+                task.decision_reason = applied.reject_reason
+            elif old == ReviewStatus.PENDING:
+                assert_transition(old, ReviewStatus.EDITING)
+                task.status = ReviewStatus.EDITING.value
+            elif old == ReviewStatus.FAILED:
+                assert_transition(old, ReviewStatus.PENDING)
+                task.status = ReviewStatus.PENDING.value
+                task.error_message = None
+
+            task.processed_text = applied.text
+            task.final_text = applied.text
+            task.matched_rules = applied.hits
+            task.detected_keywords = applied.flagged
+            task.revision += 1
+            session.add(
+                ContentRevision(
+                    review_task_id=task.id,
+                    revision_number=task.revision,
+                    source="rules",
+                    content=applied.text,
+                    created_by=user_id,
+                )
+            )
+            session.add(
+                ReviewAction(
+                    review_task_id=task.id,
+                    user_id=user_id,
+                    action=ReviewActionType.RULES_REAPPLIED.value,
+                    old_status=old.value,
+                    new_status=task.status,
+                    detail={
+                        "source": source,
+                        "reject": applied.reject,
+                        "hit_count": len(applied.hits),
+                    },
+                )
+            )
+            rules_svc = RulesService(self.session_factory)
+            await rules_svc.persist_hits(
+                session,
+                applied.hits,
+                review_task_id=task.id,
+                processed_message_id=task.processed_message_id,
+                bump_counts=True,
+            )
+            await session.commit()
+            await session.refresh(task)
+            return task, {**preview, "needs_confirm": False}
 
     async def claim_for_publish(
         self,

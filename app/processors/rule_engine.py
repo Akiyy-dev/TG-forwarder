@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database.models import KeywordRule, RuleExecutionLog, RuleGroup
+from app.database.models import KeywordRule, RuleExecutionLog
 from app.rules.engine import apply_rules
-from app.rules.types import MatchType, RuleAction, RuleDefinition, RuleType
+from app.rules.loader import load_enabled_rules
+from app.rules.types import RuleDefinition
 from app.schemas.message import NormalizedMessage, ProcessingContext, ProcessResult
 
 
@@ -29,46 +29,7 @@ class RuleEngineProcessor:
         if self.session_factory is None:
             return []
         async with self.session_factory() as session:
-            groups = {
-                g.id: g
-                for g in (
-                    await session.execute(select(RuleGroup).where(RuleGroup.enabled.is_(True)))
-                ).scalars()
-            }
-            rows = list(
-                (
-                    await session.execute(
-                        select(KeywordRule)
-                        .where(KeywordRule.enabled.is_(True))
-                        .order_by(KeywordRule.priority.asc(), KeywordRule.id.asc())
-                    )
-                ).scalars()
-            )
-            rules: list[RuleDefinition] = []
-            for row in rows:
-                if row.group_id is not None and row.group_id not in groups:
-                    continue
-                rules.append(
-                    RuleDefinition(
-                        id=row.id,
-                        name=row.name,
-                        pattern=row.pattern,
-                        rule_type=RuleType(row.rule_type),
-                        match_type=MatchType(row.match_type),
-                        action=RuleAction(row.action),
-                        replacement=row.replacement or "",
-                        case_sensitive=row.case_sensitive,
-                        whole_word=row.whole_word,
-                        use_regex=row.use_regex,
-                        priority=row.priority,
-                        enabled=row.enabled,
-                        stop_processing=row.stop_processing,
-                        source_channel_ids=list(row.source_channel_ids or []),
-                        target_channel_ids=list(row.target_channel_ids or []),
-                        message_types=list(row.message_types or []),
-                    )
-                )
-            return rules
+            return await load_enabled_rules(session)
 
     async def process(
         self,
