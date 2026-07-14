@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff check
+        run: ruff check app scripts tests
+
+      - name: Ruff format
+        run: ruff format --check app scripts tests
+
+      - name: Mypy
+        run: mypy app
+
+      - name: Pytest
+        env:
+          TELEGRAM_API_ID: "1"
+          TELEGRAM_API_HASH: "testhash"
+          BOT_TOKEN: "1:TEST"
+          BOT_ADMIN_IDS: "1"
+          TARGET_CHANNEL_ID: "-1001"
+          SOURCE_CHANNELS: "@demo"
+        run: pytest -q

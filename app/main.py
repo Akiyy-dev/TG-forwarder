@@ -1,0 +1,168 @@
+"""Application entrypoint: wire listener, workers, and bot polling."""
+
+from __future__ import annotations
+
+import asyncio
+import signal
+from typing import Any
+
+from telethon import TelegramClient
+from telethon.tl.types import Channel
+
+from app.bot.dispatcher import create_bot, create_dispatcher
+from app.config import Settings, get_settings
+from app.database.session import dispose_engine, init_db
+from app.listeners.telegram_listener import TelegramListener
+from app.logging import get_logger, setup_logging
+from app.publishers.telegram_publisher import TelegramPublisher
+from app.services.channel_service import ChannelService, parse_channel_ref
+from app.services.media_service import MediaService
+from app.services.message_service import MessageService
+from app.utils.files import ensure_dir
+
+logger = get_logger(__name__)
+
+
+async def resolve_source_channels(
+    settings: Settings,
+) -> list[tuple[int, str | None, str | None]]:
+    """Resolve SOURCE_CHANNELS refs to chat ids via Telethon."""
+    client = TelegramClient(
+        settings.telegram_session_path,
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    resolved: list[tuple[int, str | None, str | None]] = []
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            msg = "Session not authorized; run python -m scripts.create_session first"
+            raise RuntimeError(msg)
+        for ref in settings.source_channels:
+            parsed = parse_channel_ref(ref)
+            entity = await client.get_entity(parsed)
+            chat_id = int(entity.id)
+            if isinstance(entity, Channel) and chat_id > 0:
+                chat_id = int(f"-100{chat_id}")
+            username = getattr(entity, "username", None)
+            title = getattr(entity, "title", None)
+            resolved.append((chat_id, username, title))
+            logger.info(
+                "channel_resolved",
+                source_chat_id=chat_id,
+                username=username,
+            )
+    finally:
+        await client.disconnect()
+    return resolved
+
+
+async def run_app() -> None:
+    settings = get_settings()
+    setup_logging(settings.log_level, json_logs=settings.app_env != "development")
+    ensure_dir(settings.download_dir)
+    ensure_dir("./data/database")
+    ensure_dir("./data/sessions")
+
+    session_factory = await init_db(settings.database_url)
+    channel_service = ChannelService(settings, session_factory)
+
+    resolved = await resolve_source_channels(settings)
+    await channel_service.sync_from_settings(resolved)
+
+    bot = create_bot(settings.bot_token)
+    publisher = TelegramPublisher(
+        bot,
+        max_retries=settings.max_retries,
+        base_delay=settings.retry_base_delay_seconds,
+    )
+    media_service = MediaService(
+        settings.download_dir,
+        max_size_bytes=settings.max_download_size_bytes,
+        ttl_minutes=settings.temp_file_ttl_minutes,
+    )
+    media_service.cleanup_expired()
+
+    message_service = MessageService(
+        settings,
+        session_factory,
+        channel_service,
+        publisher,
+        media_service,
+    )
+
+    # Collect chat ids in both forms for Telethon filter matching
+    source_ids: set[int] = set()
+    for chat_id, _, _ in resolved:
+        source_ids.add(chat_id)
+        s = str(chat_id)
+        if s.startswith("-100"):
+            source_ids.add(int(s[4:]))
+
+    listener = TelegramListener(
+        api_id=settings.telegram_api_id,
+        api_hash=settings.telegram_api_hash,
+        session_path=settings.telegram_session_path,
+        source_chat_ids=source_ids,
+        on_message=message_service.enqueue,
+        album_wait_seconds=settings.album_wait_seconds,
+        album_max_wait_seconds=settings.album_max_wait_seconds,
+        target_channel_id=settings.target_channel_id,
+    )
+    media_service.downloader = listener
+
+    dp = create_dispatcher(
+        settings,
+        message_service=message_service,
+        channel_service=channel_service,
+        listener=listener,
+    )
+
+    stop_event = asyncio.Event()
+
+    def _request_stop(*_args: Any) -> None:
+        logger.info("shutdown_signal")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except NotImplementedError:
+            # Windows
+            signal.signal(sig, lambda *_: _request_stop())
+
+    await message_service.start_workers()
+    await message_service.recover_pending()
+    await listener.start()
+
+    polling_task = asyncio.create_task(dp.start_polling(bot))
+    listener_task = asyncio.create_task(listener.run_until_disconnected())
+
+    logger.info("app_started", app_env=settings.app_env)
+
+    stop_waiter = asyncio.create_task(stop_event.wait())
+    done, pending = await asyncio.wait(
+        {stop_waiter, polling_task, listener_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    logger.info("app_stopping")
+    stop_event.set()
+    await listener.stop()
+    await message_service.stop_workers()
+    await dp.stop_polling()
+    for task in pending | done:
+        task.cancel()
+    await asyncio.gather(polling_task, listener_task, stop_waiter, return_exceptions=True)
+    await bot.session.close()
+    await dispose_engine()
+    logger.info("app_stopped")
+
+
+def main() -> None:
+    asyncio.run(run_app())
+
+
+if __name__ == "__main__":
+    main()
