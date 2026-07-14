@@ -241,3 +241,87 @@ class ContentRevision(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class RuleGroup(Base):
+    __tablename__ = "rule_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class KeywordRule(Base):
+    __tablename__ = "keyword_rules"
+    __table_args__ = (Index("ix_keyword_rules_priority", "priority"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    rule_type: Mapped[str] = mapped_column(String(32), nullable=False, default="keyword")
+    match_type: Mapped[str] = mapped_column(String(32), nullable=False, default="contains")
+    pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    replacement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    case_sensitive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    whole_word: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    use_regex: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_channel_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    target_channel_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    message_types: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, default="flag")
+    stop_processing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    group_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("rule_groups.id"), nullable=True
+    )
+    hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class RuleExecutionLog(Base):
+    __tablename__ = "rule_execution_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    processed_message_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("processed_messages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    review_task_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("review_tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    rule_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("keyword_rules.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    rule_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    matched_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    replacement_text: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    match_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    match_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    before_excerpt: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    after_excerpt: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

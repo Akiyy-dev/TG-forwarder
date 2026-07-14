@@ -72,7 +72,11 @@ class MessageService:
                 )
                 return found is not None
 
-        return build_default_pipeline(self.settings, duplicate_exists_fn=exists)
+        return build_default_pipeline(
+            self.settings,
+            duplicate_exists_fn=exists,
+            session_factory=self.session_factory,
+        )
 
     @property
     def paused(self) -> bool:
