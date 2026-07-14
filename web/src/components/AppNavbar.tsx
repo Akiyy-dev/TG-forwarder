@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 
 const items = [
   { label: '仪表盘', to: '/dashboard', enabled: true },
-  { label: '审核队列', to: '/reviews', enabled: false },
+  { label: '审核队列', to: '/reviews', enabled: true },
   { label: '规则管理', to: '/rules', enabled: false },
   { label: '频道管理', to: '/channels', enabled: false },
   { label: '系统状态', to: '/system', enabled: false },

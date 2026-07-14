@@ -4,6 +4,8 @@ import { MainLayout } from './layouts/MainLayout'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
+import { ReviewDetailPage } from './pages/ReviewDetailPage'
+import { ReviewsPage } from './pages/ReviewsPage'
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
       >
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/reviews" element={<ReviewsPage />} />
+        <Route path="/reviews/:id" element={<ReviewDetailPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
