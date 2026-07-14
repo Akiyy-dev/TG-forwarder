@@ -6,7 +6,8 @@ const items = [
   { label: '审核队列', to: '/reviews', enabled: true },
   { label: '规则管理', to: '/rules', enabled: true },
   { label: '频道管理', to: '/channels', enabled: true },
-  { label: '系统状态', to: '/system', enabled: false },
+  { label: '系统状态', to: '/system', enabled: true },
+  { label: '系统日志', to: '/logs', enabled: true },
 ]
 
 export function AppNavbar() {

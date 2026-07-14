@@ -104,6 +104,11 @@ class MessageService:
             await session.commit()
         self._paused = paused
 
+    async def resume_publishing(self) -> int:
+        """Clear pause flag and re-queue pending_publish / stuck jobs."""
+        await self.set_paused(False)
+        return await self.recover_pending()
+
     async def start_workers(self, worker_count: int | None = None) -> None:
         await self.refresh_paused()
         self._running = True

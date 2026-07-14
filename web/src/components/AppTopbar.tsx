@@ -8,15 +8,17 @@ import {
 } from '@mantine/core'
 import { useDashboard } from '../hooks/useDashboard'
 import { useLogout, useMe } from '../hooks/useAuth'
+import { useStatusEvents } from '../hooks/useStatusEvents'
 
 export function AppTopbar() {
   const { data: user } = useMe()
   const { data: dash } = useDashboard()
+  const live = useStatusEvents(true)
   const logout = useLogout()
   const { colorScheme, setColorScheme } = useMantineColorScheme()
 
-  const paused = dash?.service.publishing_paused
-  const pending = dash?.counts.pending_review ?? 0
+  const paused = live?.publishing_paused ?? dash?.service.publishing_paused
+  const pending = live?.pending_review ?? dash?.counts.pending_review ?? 0
 
   return (
     <Group h="100%" px="md" justify="space-between" wrap="nowrap">

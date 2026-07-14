@@ -17,6 +17,7 @@ from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import media as media_routes
 from app.api.routes import reviews as reviews_routes
 from app.api.routes import rules as rules_routes
+from app.api.routes import system as system_routes
 from app.api.routes import users as users_routes
 from app.context import AppContext
 
@@ -63,6 +64,7 @@ def create_api_app(ctx: AppContext) -> FastAPI:
     app.include_router(rules_routes.router, prefix="/api/v1")
     app.include_router(channels_routes.router, prefix="/api/v1")
     app.include_router(dashboard_routes.router, prefix="/api/v1")
+    app.include_router(system_routes.router, prefix="/api/v1")
 
     @app.get("/api/v1/health")
     async def health() -> dict[str, object]:
