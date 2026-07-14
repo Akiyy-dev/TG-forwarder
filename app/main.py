@@ -1,4 +1,4 @@
-"""Application entrypoint: wire listener, workers, and bot polling."""
+"""Application entrypoint: wire listener, workers, bot polling, and web API."""
 
 from __future__ import annotations
 
@@ -6,11 +6,15 @@ import asyncio
 import signal
 from typing import Any
 
+import uvicorn
 from telethon import TelegramClient
 from telethon.tl.types import Channel
 
+from app.api.app import create_api_app
+from app.auth.service import AuthService
 from app.bot.dispatcher import create_bot, create_dispatcher
 from app.config import Settings, get_settings
+from app.context import AppContext
 from app.database.session import dispose_engine, init_db
 from app.listeners.telegram_listener import TelegramListener
 from app.logging import get_logger, setup_logging
@@ -66,6 +70,8 @@ async def run_app() -> None:
 
     session_factory = await init_db(settings.database_url)
     channel_service = ChannelService(settings, session_factory)
+    auth_service = AuthService(settings, session_factory)
+    await auth_service.ensure_bootstrap_admin()
 
     resolved = await resolve_source_channels(settings)
     await channel_service.sync_from_settings(resolved)
@@ -91,7 +97,6 @@ async def run_app() -> None:
         media_service,
     )
 
-    # Collect chat ids in both forms for Telethon filter matching
     source_ids: set[int] = set()
     for chat_id, _, _ in resolved:
         source_ids.add(chat_id)
@@ -118,6 +123,19 @@ async def run_app() -> None:
         listener=listener,
     )
 
+    ctx = AppContext(
+        settings=settings,
+        session_factory=session_factory,
+        channel_service=channel_service,
+        media_service=media_service,
+        message_service=message_service,
+        publisher=publisher,
+        auth_service=auth_service,
+        listener=listener,
+        bot=bot,
+        dispatcher=dp,
+    )
+
     stop_event = asyncio.Event()
 
     def _request_stop(*_args: Any) -> None:
@@ -129,32 +147,46 @@ async def run_app() -> None:
         try:
             loop.add_signal_handler(sig, _request_stop)
         except NotImplementedError:
-            # Windows
             signal.signal(sig, lambda *_: _request_stop())
 
     await message_service.start_workers()
     await message_service.recover_pending()
     await listener.start()
 
-    polling_task = asyncio.create_task(dp.start_polling(bot))
-    listener_task = asyncio.create_task(listener.run_until_disconnected())
+    tasks: set[asyncio.Task[Any]] = {
+        asyncio.create_task(dp.start_polling(bot), name="bot_polling"),
+        asyncio.create_task(listener.run_until_disconnected(), name="listener"),
+        asyncio.create_task(stop_event.wait(), name="stop_waiter"),
+    }
 
-    logger.info("app_started", app_env=settings.app_env)
+    uvicorn_server: uvicorn.Server | None = None
+    if settings.web_enabled:
+        api_app = create_api_app(ctx)
+        config = uvicorn.Config(
+            api_app,
+            host=settings.web_host,
+            port=settings.web_port,
+            log_level=settings.log_level.lower(),
+            access_log=False,
+        )
+        uvicorn_server = uvicorn.Server(config)
+        tasks.add(asyncio.create_task(uvicorn_server.serve(), name="web_api"))
+        logger.info("web_api_starting", host=settings.web_host, port=settings.web_port)
 
-    stop_waiter = asyncio.create_task(stop_event.wait())
-    done, pending = await asyncio.wait(
-        {stop_waiter, polling_task, listener_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
+    logger.info("app_started", app_env=settings.app_env, web_enabled=settings.web_enabled)
+
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
     logger.info("app_stopping")
     stop_event.set()
+    if uvicorn_server is not None:
+        uvicorn_server.should_exit = True
     await listener.stop()
     await message_service.stop_workers()
     await dp.stop_polling()
     for task in pending | done:
         task.cancel()
-    await asyncio.gather(polling_task, listener_task, stop_waiter, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
     await bot.session.close()
     await dispose_engine()
     logger.info("app_stopped")

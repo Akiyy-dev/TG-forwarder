@@ -25,6 +25,9 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Settings:
     monkeypatch.setenv("DOWNLOAD_DIR", str(tmp_path / "downloads"))
     monkeypatch.setenv("TEXT_REPLACEMENTS", "Foo=>Bar|old=>new")
     monkeypatch.setenv("MESSAGE_FOOTER", "— via TG-forwarder")
+    monkeypatch.setenv("WEB_ENABLED", "true")
+    monkeypatch.setenv("WEB_SECRET_KEY", "test-secret-key-please-change")
+    monkeypatch.setenv("WEB_DOCS_ENABLED", "true")
     clear_settings_cache()
     from app.config import Settings as SettingsCls
 

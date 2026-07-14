@@ -6,6 +6,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.config import Settings
 from app.logging import get_logger
 from app.processors.base import MessageProcessor
@@ -13,6 +15,7 @@ from app.processors.deduplication import DeduplicationProcessor
 from app.processors.footer import FooterProcessor
 from app.processors.keyword_filter import KeywordFilterProcessor
 from app.processors.link_filter import LinkFilterProcessor
+from app.processors.rule_engine import RuleEngineProcessor
 from app.processors.text_replace import TextReplaceProcessor
 from app.schemas.message import (
     NormalizedMessage,
@@ -76,6 +79,7 @@ def build_default_pipeline(
     settings: Settings,
     *,
     duplicate_exists_fn: DuplicateExistsFn | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> ProcessorPipeline:
     processors: list[MessageProcessor] = [
         KeywordFilterProcessor(
@@ -97,6 +101,7 @@ def build_default_pipeline(
             allowed_domains=settings.allowed_link_domains,
             enabled=settings.enable_link_filter,
         ),
+        RuleEngineProcessor(session_factory, enabled=session_factory is not None),
         FooterProcessor(settings.message_footer, enabled=settings.enable_footer),
         DeduplicationProcessor(
             exists_fn=duplicate_exists_fn,

@@ -33,6 +33,7 @@ class MessageStatus(StrEnum):
     COLLECTING_ALBUM = "collecting_album"
     PROCESSING = "processing"
     FILTERED = "filtered"
+    PENDING_REVIEW = "pending_review"
     PENDING_PUBLISH = "pending_publish"
     PUBLISHING = "publishing"
     PUBLISHED = "published"

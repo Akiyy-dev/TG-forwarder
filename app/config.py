@@ -111,12 +111,29 @@ class Settings(BaseSettings):
     max_retries: int = 3
     retry_base_delay_seconds: float = 2.0
 
+    # Web admin panel
+    web_enabled: bool = True
+    web_host: str = "0.0.0.0"
+    web_port: int = 8000
+    web_admin_username: str = "admin"
+    web_admin_password_hash: str = ""
+    web_secret_key: str = ""
+    web_access_token_expire_minutes: int = 60
+    web_refresh_token_expire_days: int = 7
+    web_allowed_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    web_secure_cookies: bool = False
+    web_trust_proxy: bool = False
+    web_docs_enabled: bool = True
+    web_login_rate_limit: int = 10
+    web_login_rate_window_seconds: int = 60
+
     @field_validator(
         "blocked_keywords",
         "allowed_keywords",
         "source_channels",
         "blocked_link_domains",
         "allowed_link_domains",
+        "web_allowed_origins",
         mode="before",
     )
     @classmethod
@@ -161,6 +178,9 @@ class Settings(BaseSettings):
         if self.album_wait_seconds <= 0 or self.album_max_wait_seconds < self.album_wait_seconds:
             msg = "ALBUM wait times are invalid"
             raise ValueError(msg)
+        if self.web_enabled and not self.web_secret_key.strip():
+            msg = "WEB_SECRET_KEY is required when WEB_ENABLED=true"
+            raise ValueError(msg)
         return self
 
     @property
@@ -175,7 +195,7 @@ class Settings(BaseSettings):
             f"Settings(app_env={self.app_env!r}, log_level={self.log_level!r}, "
             f"telegram_api_id=***, telegram_api_hash=***, telegram_phone=***, "
             f"bot_token=***, target_channel_id={self.target_channel_id}, "
-            f"source_channels={self.source_channels!r})"
+            f"source_channels={self.source_channels!r}, web_enabled={self.web_enabled})"
         )
 
 

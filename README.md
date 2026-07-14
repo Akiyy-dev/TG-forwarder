@@ -160,8 +160,43 @@ alembic upgrade head
 | `/sources` | 来源频道列表 |
 | `/stats` | 过滤 / 发布 / 失败计数 |
 | `/retry_failed` | 重试失败任务 |
-| `/pause` / `/resume` | 暂停/恢复发布（仍可记录收到的消息） |
+| `/pause` / `/resume` | 暂停/恢复发布；`/resume` 会把 `pending_publish` 等卡住任务重新入队 |
 | `/help` | 帮助 |
+
+## Web 管理面板
+
+启用后同一进程提供 FastAPI + 静态前端（无 Docker）。默认频道发布模式为 **REVIEW**（全部进人工审核）。
+
+### 后端配置
+
+| 变量 | 说明 |
+|------|------|
+| `WEB_ENABLED` | `true` 开启 Web API / SPA |
+| `WEB_HOST` / `WEB_PORT` | 监听地址，默认 `0.0.0.0:8000` |
+| `WEB_SECRET_KEY` | JWT 签名密钥（必填） |
+| `WEB_ALLOWED_ORIGINS` | CORS，开发前端默认 `http://localhost:5173` |
+| `WEB_SECURE_COOKIES` | 生产 HTTPS 下设 `true` |
+| `WEB_DOCS_ENABLED` | 是否暴露 `/api/docs` |
+
+创建管理员：
+
+```bash
+python -m scripts.create_admin
+alembic upgrade head
+```
+
+启动 `python -m app.main` 后，若已构建前端，浏览器打开 `http://<host>:8000/`；API 前缀为 `/api/v1`。
+
+### 前端开发
+
+```bash
+cd web
+npm ci
+npm run dev          # http://localhost:5173 ，/api 代理到 8000
+npm run build        # 输出 web/dist ，由后端同源挂载
+```
+
+主要页面：仪表盘、审核队列/详情、规则管理、频道发布模式、系统状态（SSE）、日志审计。角色：`viewer` 只读，`reviewer` 审核，`super_admin` 管理规则/频道/系统。
 
 ## 常见错误
 
@@ -217,11 +252,17 @@ cp -a data/database data/database.bak
 ## 开发与质量检查
 
 ```bash
+# 后端
 ruff check app scripts tests
 ruff format --check app scripts tests
 mypy app
 pytest
+
+# 前端
+cd web && npm ci && npm run build
 ```
+
+CI（GitHub Actions）会对后端跑 ruff/mypy/pytest，并对 `web/` 执行 `npm ci && npm run build`。
 
 ## 许可证与合规
 

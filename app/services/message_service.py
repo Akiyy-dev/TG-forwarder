@@ -16,6 +16,8 @@ from app.logging import get_logger
 from app.processors.deduplication import DeduplicationProcessor
 from app.processors.pipeline import ProcessorPipeline, build_default_pipeline
 from app.publishers.telegram_publisher import TelegramPublisher
+from app.review.service import ReviewService
+from app.schemas.channel import PublishMode
 from app.schemas.message import (
     MessageStatus,
     NormalizedMessage,
@@ -43,12 +45,14 @@ class MessageService:
         channel_service: ChannelService,
         publisher: TelegramPublisher,
         media_service: MediaService,
+        review_service: ReviewService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.channel_service = channel_service
         self.publisher = publisher
         self.media_service = media_service
+        self.review_service = review_service or ReviewService(session_factory)
         self.queue: asyncio.Queue[QueueItem | None] = asyncio.Queue(maxsize=settings.queue_maxsize)
         self._channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._global_sem = asyncio.Semaphore(settings.max_concurrency)
@@ -69,7 +73,11 @@ class MessageService:
                 )
                 return found is not None
 
-        return build_default_pipeline(self.settings, duplicate_exists_fn=exists)
+        return build_default_pipeline(
+            self.settings,
+            duplicate_exists_fn=exists,
+            session_factory=self.session_factory,
+        )
 
     @property
     def paused(self) -> bool:
@@ -95,6 +103,11 @@ class MessageService:
             await repo.set_paused(paused)
             await session.commit()
         self._paused = paused
+
+    async def resume_publishing(self) -> int:
+        """Clear pause flag and re-queue pending_publish / stuck jobs."""
+        await self.set_paused(False)
+        return await self.recover_pending()
 
     async def start_workers(self, worker_count: int | None = None) -> None:
         await self.refresh_paused()
@@ -232,6 +245,8 @@ class MessageService:
             await session.commit()
             record_id = record.id
 
+        original_text = message.text or ""
+
         # Download media
         try:
             message = await self.media_service.materialize(message, item.raw_messages)
@@ -276,7 +291,7 @@ class MessageService:
                 self.media_service.cleanup_message_files(message)
                 return
 
-            if result.action in {ProcessAction.FAIL, ProcessAction.REVIEW}:
+            if result.action == ProcessAction.FAIL:
                 await repo.update_status(
                     record,
                     MessageStatus.FAILED.value,
@@ -284,6 +299,40 @@ class MessageService:
                     content_hash=content_hash,
                 )
                 await session.commit()
+                return
+
+            publish_mode = self.channel_service.get_publish_mode(message.source_chat_id)
+            force_review = (
+                result.action == ProcessAction.CONTINUE and publish_mode == PublishMode.REVIEW
+            )
+            if result.action == ProcessAction.REVIEW or force_review:
+                decision_reason = (
+                    result.reason
+                    if result.action == ProcessAction.REVIEW
+                    else "channel_publish_mode_review"
+                )
+                await repo.update_status(
+                    record,
+                    MessageStatus.PENDING_REVIEW.value,
+                    skip_reason=decision_reason,
+                    content_hash=content_hash,
+                    processing_result={
+                        "action": ProcessAction.REVIEW.value,
+                        "text": (result.message or message).text,
+                        "publish_mode": publish_mode.value,
+                    },
+                )
+                await session.commit()
+                processed_msg = result.message or message
+                detail = result.detail if isinstance(result.detail, dict) else {}
+                await self.review_service.create_from_message(
+                    processed=record,
+                    original_text=original_text,
+                    processed_message=processed_msg,
+                    decision_reason=decision_reason,
+                    matched_rules=list(detail.get("matched_rules") or []),
+                    detected_keywords=list(detail.get("detected_keywords") or []),
+                )
                 return
 
             publish_msg = result.message or message
@@ -295,6 +344,7 @@ class MessageService:
                     "text": publish_msg.text,
                     "media_type": publish_msg.media_type.value,
                     "album_message_ids": publish_msg.album_message_ids,
+                    "publish_mode": publish_mode.value,
                     "media_items": [
                         {
                             "media_type": i.media_type.value,
@@ -312,11 +362,14 @@ class MessageService:
             )
             await session.commit()
 
-        if self._paused:
+        publish_mode = self.channel_service.get_publish_mode(message.source_chat_id)
+        if self._paused or publish_mode == PublishMode.PAUSED:
             logger.info(
                 "publish_paused",
                 source_chat_id=message.source_chat_id,
                 source_message_id=message.source_message_id,
+                publish_mode=publish_mode.value,
+                global_paused=self._paused,
             )
             return
 

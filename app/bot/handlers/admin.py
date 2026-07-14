@@ -149,5 +149,5 @@ async def cmd_resume(
     if denial:
         await message.answer(denial)
         return
-    await message_service.set_paused(False)
-    await message.answer("Publishing resumed.")
+    requeued = await message_service.resume_publishing()
+    await message.answer(f"Publishing resumed. Requeued {requeued} message(s).")

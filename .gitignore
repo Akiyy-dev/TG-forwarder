@@ -10,8 +10,12 @@ __pycache__/
 *.so
 .Python
 build/
-dist/
+/dist/
 *.egg-info/
+
+# Frontend
+web/node_modules/
+web/dist/
 .eggs/
 *.egg
 .venv/
