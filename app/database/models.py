@@ -34,8 +34,36 @@ class SourceChannel(Base):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    publish_mode: Mapped[str] = mapped_column(
+        String(32), default="review", nullable=False, index=True
+    )
     target_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     processing_profile: Mapped[str] = mapped_column(String(64), default="default", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class TargetChannel(Base):
+    __tablename__ = "target_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    default_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    permission_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
+    permission_detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    last_permission_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

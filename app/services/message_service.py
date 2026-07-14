@@ -17,6 +17,7 @@ from app.processors.deduplication import DeduplicationProcessor
 from app.processors.pipeline import ProcessorPipeline, build_default_pipeline
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.service import ReviewService
+from app.schemas.channel import PublishMode
 from app.schemas.message import (
     MessageStatus,
     NormalizedMessage,
@@ -295,15 +296,25 @@ class MessageService:
                 await session.commit()
                 return
 
-            if result.action == ProcessAction.REVIEW:
+            publish_mode = self.channel_service.get_publish_mode(message.source_chat_id)
+            force_review = (
+                result.action == ProcessAction.CONTINUE and publish_mode == PublishMode.REVIEW
+            )
+            if result.action == ProcessAction.REVIEW or force_review:
+                decision_reason = (
+                    result.reason
+                    if result.action == ProcessAction.REVIEW
+                    else "channel_publish_mode_review"
+                )
                 await repo.update_status(
                     record,
                     MessageStatus.PENDING_REVIEW.value,
-                    skip_reason=result.reason,
+                    skip_reason=decision_reason,
                     content_hash=content_hash,
                     processing_result={
-                        "action": result.action.value,
+                        "action": ProcessAction.REVIEW.value,
                         "text": (result.message or message).text,
+                        "publish_mode": publish_mode.value,
                     },
                 )
                 await session.commit()
@@ -313,7 +324,7 @@ class MessageService:
                     processed=record,
                     original_text=original_text,
                     processed_message=processed_msg,
-                    decision_reason=result.reason,
+                    decision_reason=decision_reason,
                     matched_rules=list(detail.get("matched_rules") or []),
                     detected_keywords=list(detail.get("detected_keywords") or []),
                 )
@@ -328,6 +339,7 @@ class MessageService:
                     "text": publish_msg.text,
                     "media_type": publish_msg.media_type.value,
                     "album_message_ids": publish_msg.album_message_ids,
+                    "publish_mode": publish_mode.value,
                     "media_items": [
                         {
                             "media_type": i.media_type.value,
@@ -345,11 +357,14 @@ class MessageService:
             )
             await session.commit()
 
-        if self._paused:
+        publish_mode = self.channel_service.get_publish_mode(message.source_chat_id)
+        if self._paused or publish_mode == PublishMode.PAUSED:
             logger.info(
                 "publish_paused",
                 source_chat_id=message.source_chat_id,
                 source_message_id=message.source_message_id,
+                publish_mode=publish_mode.value,
+                global_paused=self._paused,
             )
             return
 
