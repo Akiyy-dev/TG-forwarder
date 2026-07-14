@@ -401,9 +401,7 @@ class ReviewService:
                     ReviewTask.id == task_id,
                     ReviewTask.revision == expected_revision,
                     ReviewTask.published_at.is_(None),
-                    ReviewTask.status.in_(
-                        [ReviewStatus.APPROVED.value, ReviewStatus.FAILED.value]
-                    ),
+                    ReviewTask.status.in_([ReviewStatus.APPROVED.value, ReviewStatus.FAILED.value]),
                 )
                 .values(
                     status=ReviewStatus.PUBLISHING.value,

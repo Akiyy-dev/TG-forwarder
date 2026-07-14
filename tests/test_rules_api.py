@@ -108,9 +108,7 @@ async def test_reapply_rules_requires_confirm_for_reject(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     ctx = _ctx(settings_env, session_factory)
-    await ctx.auth_service.create_user(
-        username="rev", password="password123", role=Role.REVIEWER
-    )
+    await ctx.auth_service.create_user(username="rev", password="password123", role=Role.REVIEWER)
     await ctx.auth_service.create_user(
         username="admin", password="password123", role=Role.SUPER_ADMIN
     )

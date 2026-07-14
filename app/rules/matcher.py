@@ -68,9 +68,7 @@ def find_matches(text: str, rule: RuleDefinition) -> list[MatchHit]:
     hits: list[MatchHit] = []
 
     use_regex = (
-        rule.use_regex
-        or rule.match_type == MatchType.REGEX
-        or rule.rule_type.value == "regex"
+        rule.use_regex or rule.match_type == MatchType.REGEX or rule.rule_type.value == "regex"
     )
 
     if use_regex:

@@ -76,9 +76,7 @@ class RuleEngineProcessor:
                             before_excerpt=str(hit.get("before_excerpt") or "")[:512] or None,
                             after_excerpt=str(hit.get("after_excerpt") or "")[:512] or None,
                             duration_ms=(
-                                float(duration_ms)
-                                if isinstance(duration_ms, int | float)
-                                else None
+                                float(duration_ms) if isinstance(duration_ms, int | float) else None
                             ),
                         )
                     )

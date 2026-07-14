@@ -37,8 +37,7 @@ async def system_status(
             "queue_size": ctx.message_service.queue_size,
             "last_error": ctx.message_service.last_error,
             "listener_running": ctx.listener is not None,
-            "bot_available": ctx.bot is not None
-            or getattr(ctx.publisher, "bot", None) is not None,
+            "bot_available": ctx.bot is not None or getattr(ctx.publisher, "bot", None) is not None,
             "message_stats": stats,
         }
     )
@@ -220,9 +219,7 @@ async def list_rule_execution_logs(
     params = PageParams(page=page, page_size=page_size)
     async with ctx.session_factory() as session:
         total = int(
-            (
-                await session.execute(select(func.count()).select_from(RuleExecutionLog))
-            ).scalar_one()
+            (await session.execute(select(func.count()).select_from(RuleExecutionLog))).scalar_one()
         )
         rows = list(
             (

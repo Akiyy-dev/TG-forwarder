@@ -222,9 +222,7 @@ async def patch_rule(
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[RuleOut]:
     try:
-        rule = await _svc(ctx).update_rule(
-            rule_id, body.model_dump(exclude_unset=True)
-        )
+        rule = await _svc(ctx).update_rule(rule_id, body.model_dump(exclude_unset=True))
     except RulesServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=RuleOut.model_validate(rule))
@@ -329,9 +327,7 @@ async def patch_group(
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[GroupOut]:
     try:
-        group = await _svc(ctx).update_group(
-            group_id, body.model_dump(exclude_unset=True)
-        )
+        group = await _svc(ctx).update_group(group_id, body.model_dump(exclude_unset=True))
     except RulesServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=GroupOut.model_validate(group))

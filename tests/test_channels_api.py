@@ -53,9 +53,7 @@ async def test_channels_crud_default_review(
     await ctx.auth_service.create_user(
         username="admin", password="password123", role=Role.SUPER_ADMIN
     )
-    await ctx.auth_service.create_user(
-        username="viewer", password="password123", role=Role.VIEWER
-    )
+    await ctx.auth_service.create_user(username="viewer", password="password123", role=Role.VIEWER)
     app = create_api_app(ctx)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -165,9 +163,7 @@ async def test_publish_mode_review_and_paused(
     bot.send_message.reset_mock()
     sources, _ = await ctx.channel_service.list_sources_paginated(page=1, page_size=10)
     source = next(s for s in sources if s.chat_id == -100301)
-    await ctx.channel_service.update_source(
-        source.id, {"publish_mode": PublishMode.PAUSED.value}
-    )
+    await ctx.channel_service.update_source(source.id, {"publish_mode": PublishMode.PAUSED.value})
 
     msg2 = NormalizedMessage(
         source_chat_id=-100301,

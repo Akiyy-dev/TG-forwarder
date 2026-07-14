@@ -299,11 +299,7 @@ class ChannelService:
             status_name = getattr(getattr(member, "status", None), "value", None) or str(
                 getattr(member, "status", "unknown")
             )
-            status = (
-                "ok"
-                if status_name in {"administrator", "creator"} or can_post
-                else "missing"
-            )
+            status = "ok" if status_name in {"administrator", "creator"} or can_post else "missing"
             detail = {
                 "bot_id": me.id,
                 "bot_username": me.username,
