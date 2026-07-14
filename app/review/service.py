@@ -286,30 +286,40 @@ class ReviewService:
         user_id: int | None = None,
     ) -> ReviewTask | None:
         """Atomically move APPROVED/FAILED -> PUBLISHING. Returns None if lost race."""
+        from sqlalchemy import CursorResult, update
+
+        now = datetime.now(UTC)
         async with self.session_factory() as session:
+            result = await session.execute(
+                update(ReviewTask)
+                .where(
+                    ReviewTask.id == task_id,
+                    ReviewTask.revision == expected_revision,
+                    ReviewTask.published_at.is_(None),
+                    ReviewTask.status.in_(
+                        [ReviewStatus.APPROVED.value, ReviewStatus.FAILED.value]
+                    ),
+                )
+                .values(
+                    status=ReviewStatus.PUBLISHING.value,
+                    revision=expected_revision + 1,
+                    publishing_started_at=now,
+                )
+            )
+            rowcount = result.rowcount if isinstance(result, CursorResult) else 0
+            if rowcount != 1:
+                await session.rollback()
+                return None
             task = await session.get(ReviewTask, task_id)
             if task is None:
+                await session.rollback()
                 return None
-            if task.revision != expected_revision:
-                return None
-            if task.status not in {
-                ReviewStatus.APPROVED.value,
-                ReviewStatus.FAILED.value,
-            }:
-                return None
-            if task.published_at is not None:
-                return None
-            old = ReviewStatus(task.status)
-            assert_transition(old, ReviewStatus.PUBLISHING)
-            task.status = ReviewStatus.PUBLISHING.value
-            task.revision += 1
-            task.publishing_started_at = datetime.now(UTC)
             session.add(
                 ReviewAction(
                     review_task_id=task.id,
                     user_id=user_id,
                     action=ReviewActionType.PUBLISH_STARTED.value,
-                    old_status=old.value,
+                    old_status=ReviewStatus.APPROVED.value,
                     new_status=ReviewStatus.PUBLISHING.value,
                 )
             )
