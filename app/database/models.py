@@ -151,3 +151,93 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ReviewTask(Base):
+    __tablename__ = "review_tasks"
+    __table_args__ = (
+        Index("ix_review_tasks_status", "status"),
+        Index("ix_review_tasks_source", "source_chat_id", "source_message_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    processed_message_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("processed_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    source_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    original_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    processed_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    final_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    media_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
+    media_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched_rules: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    detected_keywords: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    published_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    media_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publishing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ReviewAction(Base):
+    __tablename__ = "review_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("review_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ContentRevision(Base):
+    __tablename__ = "content_revisions"
+    __table_args__ = (
+        UniqueConstraint("review_task_id", "revision_number", name="uq_review_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("review_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

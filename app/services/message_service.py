@@ -16,6 +16,7 @@ from app.logging import get_logger
 from app.processors.deduplication import DeduplicationProcessor
 from app.processors.pipeline import ProcessorPipeline, build_default_pipeline
 from app.publishers.telegram_publisher import TelegramPublisher
+from app.review.service import ReviewService
 from app.schemas.message import (
     MessageStatus,
     NormalizedMessage,
@@ -43,12 +44,14 @@ class MessageService:
         channel_service: ChannelService,
         publisher: TelegramPublisher,
         media_service: MediaService,
+        review_service: ReviewService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.channel_service = channel_service
         self.publisher = publisher
         self.media_service = media_service
+        self.review_service = review_service or ReviewService(session_factory)
         self.queue: asyncio.Queue[QueueItem | None] = asyncio.Queue(maxsize=settings.queue_maxsize)
         self._channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._global_sem = asyncio.Semaphore(settings.max_concurrency)
@@ -232,6 +235,8 @@ class MessageService:
             await session.commit()
             record_id = record.id
 
+        original_text = message.text or ""
+
         # Download media
         try:
             message = await self.media_service.materialize(message, item.raw_messages)
@@ -276,7 +281,7 @@ class MessageService:
                 self.media_service.cleanup_message_files(message)
                 return
 
-            if result.action in {ProcessAction.FAIL, ProcessAction.REVIEW}:
+            if result.action == ProcessAction.FAIL:
                 await repo.update_status(
                     record,
                     MessageStatus.FAILED.value,
@@ -284,6 +289,30 @@ class MessageService:
                     content_hash=content_hash,
                 )
                 await session.commit()
+                return
+
+            if result.action == ProcessAction.REVIEW:
+                await repo.update_status(
+                    record,
+                    MessageStatus.PENDING_REVIEW.value,
+                    skip_reason=result.reason,
+                    content_hash=content_hash,
+                    processing_result={
+                        "action": result.action.value,
+                        "text": (result.message or message).text,
+                    },
+                )
+                await session.commit()
+                processed_msg = result.message or message
+                detail = result.detail if isinstance(result.detail, dict) else {}
+                await self.review_service.create_from_message(
+                    processed=record,
+                    original_text=original_text,
+                    processed_message=processed_msg,
+                    decision_reason=result.reason,
+                    matched_rules=list(detail.get("matched_rules") or []),
+                    detected_keywords=list(detail.get("detected_keywords") or []),
+                )
                 return
 
             publish_msg = result.message or message
