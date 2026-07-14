@@ -308,7 +308,7 @@ class ReviewService:
                 ReviewAction(
                     review_task_id=task.id,
                     user_id=user_id,
-                    action=ReviewActionType.APPROVED.value,
+                    action=ReviewActionType.PUBLISH_STARTED.value,
                     old_status=old.value,
                     new_status=ReviewStatus.PUBLISHING.value,
                 )

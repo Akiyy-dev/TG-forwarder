@@ -42,9 +42,7 @@ async def test_viewer_forbidden_from_user_admin(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     ctx = _ctx(settings_env, session_factory)
-    await ctx.auth_service.create_user(
-        username="viewer1", password="password123", role=Role.VIEWER
-    )
+    await ctx.auth_service.create_user(username="viewer1", password="password123", role=Role.VIEWER)
     await ctx.auth_service.create_user(
         username="boss", password="password123", role=Role.SUPER_ADMIN
     )

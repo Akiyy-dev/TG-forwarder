@@ -22,6 +22,7 @@ class ReviewActionType(StrEnum):
     EDITED = "edited"
     APPROVED = "approved"
     REJECTED = "rejected"
+    PUBLISH_STARTED = "publish_started"
     PUBLISHED = "published"
     PUBLISH_FAILED = "publish_failed"
     RETRIED = "retried"
