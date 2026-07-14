@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.errors import register_exception_handlers
 from app.api.routes import auth as auth_routes
 from app.api.routes import channels as channels_routes
+from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import media as media_routes
 from app.api.routes import reviews as reviews_routes
 from app.api.routes import rules as rules_routes
@@ -61,6 +62,7 @@ def create_api_app(ctx: AppContext) -> FastAPI:
     app.include_router(media_routes.router, prefix="/api/v1")
     app.include_router(rules_routes.router, prefix="/api/v1")
     app.include_router(channels_routes.router, prefix="/api/v1")
+    app.include_router(dashboard_routes.router, prefix="/api/v1")
 
     @app.get("/api/v1/health")
     async def health() -> dict[str, object]:
