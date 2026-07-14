@@ -1,11 +1,13 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { MainLayout } from './layouts/MainLayout'
+import { ChannelsPage } from './pages/ChannelsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ReviewDetailPage } from './pages/ReviewDetailPage'
 import { ReviewsPage } from './pages/ReviewsPage'
+import { RulesPage } from './pages/RulesPage'
 
 export default function App() {
   return (
@@ -22,6 +24,8 @@ export default function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/reviews" element={<ReviewsPage />} />
         <Route path="/reviews/:id" element={<ReviewDetailPage />} />
+        <Route path="/rules" element={<RulesPage />} />
+        <Route path="/channels" element={<ChannelsPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
