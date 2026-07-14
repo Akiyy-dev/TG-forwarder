@@ -6,12 +6,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import StaticPool
 
 from app.database.models import Base
 
@@ -22,25 +24,38 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def _ensure_sqlite_parent(database_url: str) -> None:
     if "sqlite" not in database_url:
         return
-    # sqlite+aiosqlite:///./path or sqlite+aiosqlite:////abs/path
     marker = ":///"
     idx = database_url.find(marker)
     if idx < 0:
         return
     raw = database_url[idx + len(marker) :]
-    # Absolute path may start with /
     path = Path(raw)
     if path.parent and str(path.parent) not in (".", ""):
         path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _apply_sqlite_pragmas(dbapi_conn: object, _connection_record: object) -> None:
+    cursor = dbapi_conn.cursor()  # type: ignore[attr-defined]
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     _ensure_sqlite_parent(database_url)
-    return create_async_engine(
-        database_url,
-        echo=False,
-        connect_args={"check_same_thread": False} if "sqlite" in database_url else {},
-    )
+    is_sqlite = "sqlite" in database_url
+    connect_args: dict[str, object] = {}
+    kwargs: dict[str, object] = {"echo": False}
+    if is_sqlite:
+        connect_args["check_same_thread"] = False
+        # In-memory / test DBs share one connection via StaticPool when needed
+        if ":memory:" in database_url:
+            kwargs["poolclass"] = StaticPool
+    engine = create_async_engine(database_url, connect_args=connect_args, **kwargs)
+    if is_sqlite:
+        event.listen(engine.sync_engine, "connect", _apply_sqlite_pragmas)
+    return engine
 
 
 def init_engine(database_url: str) -> async_sessionmaker[AsyncSession]:
@@ -64,6 +79,9 @@ async def init_db(database_url: str) -> async_sessionmaker[AsyncSession]:
     assert _engine is not None
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if "sqlite" in database_url:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=5000"))
     return factory
 
 

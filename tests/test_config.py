@@ -24,5 +24,6 @@ def test_settings_require_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_ADMIN_IDS", "1")
     monkeypatch.setenv("TARGET_CHANNEL_ID", "-1001")
     monkeypatch.setenv("SOURCE_CHANNELS", "")
+    monkeypatch.setenv("WEB_ENABLED", "false")
     with pytest.raises(ValidationError):
         Settings()  # type: ignore[call-arg]
