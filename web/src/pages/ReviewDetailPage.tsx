@@ -14,7 +14,7 @@ import {
 } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Link, useBlocker, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
   approveReview,
@@ -72,15 +72,6 @@ export function ReviewDetailPage() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
-
-  const blocker = useBlocker(dirty)
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      const ok = window.confirm('有未保存的修改，确定离开吗？')
-      if (ok) blocker.proceed()
-      else blocker.reset()
-    }
-  }, [blocker])
 
   const invalidate = async () => {
     await qc.invalidateQueries({ queryKey: ['review', taskId] })
