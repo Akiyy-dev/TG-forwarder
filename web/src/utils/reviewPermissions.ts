@@ -17,3 +17,7 @@ export function canPublishTask(role: Role | undefined, status: string): boolean 
 export function canRejectTask(role: Role | undefined, status: string): boolean {
   return canWriteReviews(role) && ['pending', 'editing', 'failed', 'approved'].includes(status)
 }
+
+export function canApproveTask(role: Role | undefined, status: string): boolean {
+  return canWriteReviews(role) && ['pending', 'editing', 'failed'].includes(status)
+}

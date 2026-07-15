@@ -19,6 +19,7 @@ from app.database.session import dispose_engine, init_db
 from app.listeners.telegram_listener import TelegramListener
 from app.logging import get_logger, setup_logging
 from app.publishers.telegram_publisher import TelegramPublisher
+from app.review.service import ReviewService
 from app.services.channel_service import ChannelService, parse_channel_ref
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
@@ -87,7 +88,6 @@ async def run_app() -> None:
         max_size_bytes=settings.max_download_size_bytes,
         ttl_minutes=settings.temp_file_ttl_minutes,
     )
-    media_service.cleanup_expired()
 
     message_service = MessageService(
         settings,
@@ -115,6 +115,10 @@ async def run_app() -> None:
         target_channel_id=settings.target_channel_id,
     )
     media_service.downloader = listener
+
+    # Protect media still referenced by open review tasks from TTL cleanup.
+    retain_paths = await ReviewService(session_factory).active_media_paths()
+    media_service.cleanup_expired(retain_paths=retain_paths)
 
     dp = create_dispatcher(
         settings,

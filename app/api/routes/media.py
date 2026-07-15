@@ -15,10 +15,14 @@ from app.api.errors import AppError
 from app.api.schemas import Envelope
 from app.context import AppContext
 from app.database.models import ReviewTask
+from app.logging import get_logger
 from app.review.preview import build_publish_preview
+from app.review.publish import message_from_task
+from app.review.service import ReviewService
 from app.utils.files import safe_join
 
 router = APIRouter(tags=["media"])
+logger = get_logger(__name__)
 
 
 def _resolve_media_path(ctx: AppContext, raw_path: str | None) -> Path | None:
@@ -44,6 +48,22 @@ def _resolve_media_path(ctx: AppContext, raw_path: str | None) -> Path | None:
     return resolved
 
 
+async def _ensure_review_media(ctx: AppContext, task: ReviewTask) -> ReviewTask:
+    """Re-download missing snapshot media for preview/stream."""
+    message = message_from_task(task)
+    if not ctx.media_service.media_missing(message):
+        return task
+    try:
+        message = await ctx.media_service.ensure_materialized(message)
+    except Exception:
+        logger.exception("review_media_rematerialize_failed", review_task_id=task.id)
+        return task
+    if ctx.media_service.media_missing(message):
+        return task
+    svc = ReviewService(ctx.session_factory)
+    return await svc.update_media_snapshot(task.id, message)
+
+
 @router.get("/reviews/{task_id}/preview", response_model=Envelope[dict[str, Any]])
 async def review_preview(
     task_id: int,
@@ -54,26 +74,27 @@ async def review_preview(
         task = await session.get(ReviewTask, task_id)
         if task is None:
             raise AppError("not_found", "Review task not found", status_code=404)
-        preview = build_publish_preview(task)
-        # Never leak absolute server paths
-        items = []
-        for idx, item in enumerate(preview.get("media_items") or []):
-            local = item.get("local_path")
-            path = _resolve_media_path(ctx, local)
-            items.append(
-                {
-                    "index": idx,
-                    "media_type": item.get("media_type"),
-                    "original_filename": item.get("original_filename"),
-                    "mime_type": item.get("mime_type"),
-                    "file_size": item.get("file_size"),
-                    "available": path is not None,
-                    "url": f"/api/v1/media/reviews/{task_id}/files/{idx}"
-                    if path is not None
-                    else None,
-                }
-            )
-        preview["media_items"] = items
+        _ = task.media_snapshot  # eager load before detach
+        session.expunge(task)
+    task = await _ensure_review_media(ctx, task)
+
+    preview = build_publish_preview(task)
+    items = []
+    for idx, item in enumerate(preview.get("media_items") or []):
+        local = item.get("local_path")
+        path = _resolve_media_path(ctx, local)
+        items.append(
+            {
+                "index": idx,
+                "media_type": item.get("media_type"),
+                "original_filename": item.get("original_filename"),
+                "mime_type": item.get("mime_type"),
+                "file_size": item.get("file_size"),
+                "available": path is not None,
+                "url": f"/api/v1/media/reviews/{task_id}/files/{idx}" if path is not None else None,
+            }
+        )
+    preview["media_items"] = items
     return Envelope(data=preview)
 
 
@@ -91,8 +112,11 @@ async def stream_review_media(
         task = await session.get(ReviewTask, task_id)
         if task is None:
             raise AppError("not_found", "Review task not found", status_code=404)
-        snap = task.media_snapshot if isinstance(task.media_snapshot, dict) else {}
-        items = list(snap.get("media_items") or [])
+        _ = task.media_snapshot
+        session.expunge(task)
+    task = await _ensure_review_media(ctx, task)
+    snap = task.media_snapshot if isinstance(task.media_snapshot, dict) else {}
+    items = list(snap.get("media_items") or [])
     if index >= len(items):
         raise AppError("not_found", "Media item not found", status_code=404)
     item = items[index]

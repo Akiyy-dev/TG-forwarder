@@ -32,16 +32,45 @@ class MediaService:
         self.ttl_minutes = ttl_minutes
         self.downloader = downloader
 
-    def cleanup_expired(self) -> int:
-        deleted = cleanup_expired_files(self.download_dir, self.ttl_minutes)
+    def cleanup_expired(self, *, retain_paths: set[str] | None = None) -> int:
+        deleted = cleanup_expired_files(
+            self.download_dir,
+            self.ttl_minutes,
+            retain_paths=retain_paths,
+        )
         if deleted:
-            logger.info("temp_files_cleaned", count=deleted)
+            logger.info("temp_files_cleaned", count=deleted, retained=len(retain_paths or ()))
         return deleted
 
     def cleanup_message_files(self, message: NormalizedMessage) -> None:
         for item in message.media_items:
             remove_file(item.local_path)
             item.local_path = None
+
+    @staticmethod
+    def _path_ok(path: str | None) -> bool:
+        return bool(path) and Path(path).is_file()
+
+    def media_missing(self, message: NormalizedMessage) -> bool:
+        if message.media_type in {MediaType.TEXT, MediaType.UNSUPPORTED, MediaType.STICKER}:
+            return False
+        items = message.media_items or []
+        if not items:
+            return True
+        return any(not self._path_ok(item.local_path) for item in items)
+
+    async def ensure_materialized(
+        self,
+        message: NormalizedMessage,
+        raw_messages: list[Any] | None = None,
+    ) -> NormalizedMessage:
+        """Re-download any media items whose local files are missing."""
+        if not self.media_missing(message):
+            return message
+        for item in message.media_items or []:
+            if not self._path_ok(item.local_path):
+                item.local_path = None
+        return await self.materialize(message, raw_messages)
 
     async def materialize(
         self,
@@ -84,6 +113,8 @@ class MediaService:
             message.media_items = items
 
         for item in items:
+            if self._path_ok(item.local_path):
+                continue
             if item.file_size and item.file_size > self.max_size_bytes:
                 msg = f"file too large: {item.file_size}"
                 raise ValueError(msg)

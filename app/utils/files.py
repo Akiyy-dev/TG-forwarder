@@ -38,17 +38,29 @@ def ensure_dir(path: Path | str) -> Path:
     return directory
 
 
-def cleanup_expired_files(directory: Path | str, ttl_minutes: int) -> int:
-    """Delete files older than ttl_minutes. Returns number of deleted files."""
+def cleanup_expired_files(
+    directory: Path | str,
+    ttl_minutes: int,
+    *,
+    retain_paths: set[str] | None = None,
+) -> int:
+    """Delete files older than ttl_minutes. Returns number of deleted files.
+
+    Paths listed in ``retain_paths`` (resolved absolute strings) are never deleted.
+    """
     root = Path(directory)
     if not root.exists():
         return 0
+    retain = retain_paths or set()
     cutoff = time.time() - (ttl_minutes * 60)
     deleted = 0
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         try:
+            resolved = str(path.resolve())
+            if resolved in retain:
+                continue
             if path.stat().st_mtime < cutoff:
                 path.unlink(missing_ok=True)
                 deleted += 1

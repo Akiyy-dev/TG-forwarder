@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -22,6 +23,17 @@ from app.schemas.message import NormalizedMessage
 from app.services.rules_service import RulesService
 
 logger = get_logger(__name__)
+
+# Media files for these tasks must survive TTL cleanup / rematerialize.
+ACTIVE_MEDIA_STATUSES = frozenset(
+    {
+        ReviewStatus.PENDING.value,
+        ReviewStatus.EDITING.value,
+        ReviewStatus.APPROVED.value,
+        ReviewStatus.PUBLISHING.value,
+        ReviewStatus.FAILED.value,
+    }
+)
 
 
 class ReviewConflictError(Exception):
@@ -52,23 +64,7 @@ class ReviewService:
             if task is not None:
                 return task
 
-            media_snapshot = {
-                "media_type": processed_message.media_type.value,
-                "album_message_ids": processed_message.album_message_ids,
-                "media_items": [
-                    {
-                        "media_type": i.media_type.value,
-                        "local_path": i.local_path,
-                        "original_filename": i.original_filename,
-                        "mime_type": i.mime_type,
-                        "file_size": i.file_size,
-                        "source_message_id": i.source_message_id,
-                        "order": i.order,
-                        "file_unique_id": i.file_unique_id,
-                    }
-                    for i in processed_message.media_items
-                ],
-            }
+            media_snapshot = self.media_snapshot_from_message(processed_message)
             processed_text = processed_message.text or ""
             task = ReviewTask(
                 processed_message_id=processed.id,
@@ -382,6 +378,62 @@ class ReviewService:
             await session.commit()
             await session.refresh(task)
             return task, {**preview, "needs_confirm": False}
+
+    @staticmethod
+    def media_snapshot_from_message(message: NormalizedMessage) -> dict[str, Any]:
+        return {
+            "media_type": message.media_type.value,
+            "album_message_ids": message.album_message_ids,
+            "media_items": [
+                {
+                    "media_type": i.media_type.value,
+                    "local_path": i.local_path,
+                    "original_filename": i.original_filename,
+                    "mime_type": i.mime_type,
+                    "file_size": i.file_size,
+                    "source_message_id": i.source_message_id,
+                    "order": i.order,
+                    "file_unique_id": i.file_unique_id,
+                }
+                for i in message.media_items
+            ],
+        }
+
+    async def update_media_snapshot(self, task_id: int, message: NormalizedMessage) -> ReviewTask:
+        """Persist rematerialized local paths without bumping revision."""
+        async with self.session_factory() as session:
+            task = await session.get(ReviewTask, task_id)
+            if task is None:
+                msg = "review task not found"
+                raise LookupError(msg)
+            task.media_snapshot = self.media_snapshot_from_message(message)
+            task.media_count = len(message.media_items)
+            task.media_type = message.media_type.value
+            await session.commit()
+            await session.refresh(task)
+            return task
+
+    async def active_media_paths(self) -> set[str]:
+        """Absolute paths still referenced by non-terminal review tasks."""
+        retain: set[str] = set()
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(ReviewTask.media_snapshot).where(
+                    ReviewTask.status.in_(tuple(ACTIVE_MEDIA_STATUSES))
+                )
+            )
+            for snap in result.scalars():
+                if not isinstance(snap, dict):
+                    continue
+                for item in snap.get("media_items") or []:
+                    raw = item.get("local_path") if isinstance(item, dict) else None
+                    if not raw:
+                        continue
+                    try:
+                        retain.add(str(Path(raw).resolve()))
+                    except OSError:
+                        continue
+        return retain
 
     async def claim_for_publish(
         self,

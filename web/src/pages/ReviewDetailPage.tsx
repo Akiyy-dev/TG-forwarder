@@ -28,6 +28,7 @@ import {
 } from '../api/reviews'
 import { useMe } from '../hooks/useAuth'
 import {
+  canApproveTask,
   canMutateTask,
   canPublishTask,
   canRejectTask,
@@ -45,6 +46,7 @@ export function ReviewDetailPage() {
   const [confirm, setConfirm] = useState<'publish' | 'reject' | 'reapply-reject' | null>(null)
   const [reason, setReason] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [approving, setApproving] = useState(false)
 
   const detail = useQuery({
     queryKey: ['review', taskId],
@@ -117,6 +119,7 @@ export function ReviewDetailPage() {
 
   const writable = canWriteReviews(user?.role)
   const canEdit = canMutateTask(user?.role, task.status)
+  const canApprove = canApproveTask(user?.role, task.status)
   const canPub = canPublishTask(user?.role, task.status)
   const canRej = canRejectTask(user?.role, task.status)
 
@@ -140,6 +143,12 @@ export function ReviewDetailPage() {
           返回列表
         </Button>
       </Group>
+
+      {task.error_message && (
+        <Alert color="orange" title="上次发布失败">
+          {task.error_message}
+        </Alert>
+      )}
 
       {error && (
         <Alert color="red" onClose={() => setError(null)} withCloseButton>
@@ -252,9 +261,19 @@ export function ReviewDetailPage() {
               <Stack gap="xs">
                 <Button
                   variant="light"
-                  disabled={!canEdit}
+                  disabled={!canApprove}
+                  loading={approving}
                   onClick={() =>
-                    void wrap(() => approveReview(taskId, task.revision, reason || undefined))
+                    void (async () => {
+                      setApproving(true)
+                      try {
+                        await wrap(() =>
+                          approveReview(taskId, task.revision, reason || undefined),
+                        )
+                      } finally {
+                        setApproving(false)
+                      }
+                    })()
                   }
                 >
                   批准
