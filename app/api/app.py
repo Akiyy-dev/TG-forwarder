@@ -8,7 +8,9 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from app.api.errors import register_exception_handlers
 from app.api.routes import auth as auth_routes
@@ -20,6 +22,24 @@ from app.api.routes import rules as rules_routes
 from app.api.routes import system as system_routes
 from app.api.routes import users as users_routes
 from app.context import AppContext
+
+# Repo root: app/api/app.py -> parents[2] == project root
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve index.html for client-side routes (e.g. /reviews) on refresh."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            # Missing hashed assets / real files should stay 404.
+            if path.startswith("assets/") or Path(path).suffix:
+                raise
+            return await super().get_response("index.html", scope)
 
 
 def create_api_app(ctx: AppContext) -> FastAPI:
@@ -76,8 +96,18 @@ def create_api_app(ctx: AppContext) -> FastAPI:
             },
         }
 
-    dist = Path("web/dist")
+    dist = _PROJECT_ROOT / "web" / "dist"
+    if not dist.is_dir():
+        cwd_dist = Path("web/dist")
+        if cwd_dist.is_dir():
+            dist = cwd_dist.resolve()
+
     if dist.is_dir():
-        app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+        # Mount last so /api/* routes take precedence; SPA fallback for client routes.
+        app.mount(
+            "/",
+            SPAStaticFiles(directory=str(dist), html=True),
+            name="frontend",
+        )
 
     return app

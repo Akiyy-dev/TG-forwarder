@@ -1,8 +1,10 @@
 import {
   Badge,
   Button,
+  Center,
   Checkbox,
   Group,
+  Loader,
   Modal,
   Pagination,
   Select,
@@ -21,8 +23,10 @@ import { useMe } from '../hooks/useAuth'
 import { canWriteReviews } from '../utils/reviewPermissions'
 import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
 
+const STATUS_ALL = 'all'
+
 const STATUS_OPTIONS = [
-  { value: '', label: '全部状态' },
+  { value: STATUS_ALL, label: '全部状态' },
   { value: 'pending', label: '待审核' },
   { value: 'editing', label: '编辑中' },
   { value: 'approved', label: '已批准' },
@@ -36,7 +40,7 @@ export function ReviewsPage() {
   const writable = canWriteReviews(user?.role)
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
-  const [status, setStatus] = useState<string | null>('')
+  const [status, setStatus] = useState<string | null>(STATUS_ALL)
   const [q, setQ] = useState('')
   const [selected, setSelected] = useState<number[]>([])
   const [confirm, setConfirm] = useState<'publish' | 'reject' | null>(null)
@@ -47,7 +51,7 @@ export function ReviewsPage() {
       listReviews({
         page,
         page_size: 20,
-        status: status || undefined,
+        status: status && status !== STATUS_ALL ? status : undefined,
         q: q || undefined,
       }),
     refetchInterval: 30_000,
@@ -97,16 +101,20 @@ export function ReviewsPage() {
           data={STATUS_OPTIONS}
           value={status}
           onChange={(v) => {
-            setStatus(v)
+            setStatus(v ?? STATUS_ALL)
             setPage(1)
           }}
+          allowDeselect={false}
           w={180}
         />
         <TextInput
           label="搜索文本"
           placeholder="匹配 final_text"
           value={q}
-          onChange={(e) => setQ(e.currentTarget.value)}
+          onChange={(e) => {
+            setQ(e.currentTarget.value)
+            setPage(1)
+          }}
           w={260}
         />
         {writable && selected.length > 0 && (
@@ -122,70 +130,80 @@ export function ReviewsPage() {
       </Group>
 
       {query.error && (
-        <Text c="red">{(query.error as Error).message}</Text>
+        <Text c="red">
+          {query.error instanceof ApiError
+            ? `${query.error.message} (${query.error.code})`
+            : (query.error as Error).message}
+        </Text>
       )}
 
-      <Table striped highlightOnHover withTableBorder>
-        <Table.Thead>
-          <Table.Tr>
-            {writable && <Table.Th w={40} />}
-            <Table.Th>ID</Table.Th>
-            <Table.Th>状态</Table.Th>
-            <Table.Th>来源</Table.Th>
-            <Table.Th>摘要</Table.Th>
-            <Table.Th>媒体</Table.Th>
-            <Table.Th>更新</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {items.map((row) => (
-            <Table.Tr key={row.id}>
-              {writable && (
-                <Table.Td>
-                  <Checkbox
-                    checked={selected.includes(row.id)}
-                    onChange={(e) => toggle(row.id, e.currentTarget.checked)}
-                    disabled={['published', 'rejected', 'expired'].includes(row.status)}
-                  />
-                </Table.Td>
-              )}
-              <Table.Td>
-                <Text component={Link} to={`/reviews/${row.id}`} c="teal" fw={600}>
-                  #{row.id}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                <Badge color={reviewStatusColor(row.status)} variant="light">
-                  {reviewStatusLabel(row.status)}
-                </Badge>
-              </Table.Td>
-              <Table.Td>
-                {row.source_chat_id}/{row.source_message_id}
-              </Table.Td>
-              <Table.Td maw={360}>
-                <Text lineClamp={1} size="sm">
-                  {row.final_text || '(空)'}
-                </Text>
-              </Table.Td>
-              <Table.Td>
-                {row.media_type} · {row.media_count}
-              </Table.Td>
-              <Table.Td>
-                <Text size="xs" c="dimmed">
-                  {row.updated_at ?? '-'}
-                </Text>
-              </Table.Td>
-            </Table.Tr>
-          ))}
-          {items.length === 0 && (
+      {query.isLoading ? (
+        <Center py="xl">
+          <Loader />
+        </Center>
+      ) : (
+        <Table striped highlightOnHover withTableBorder>
+          <Table.Thead>
             <Table.Tr>
-              <Table.Td colSpan={writable ? 7 : 6}>
-                <Text c="dimmed">暂无审核任务</Text>
-              </Table.Td>
+              {writable && <Table.Th w={40} />}
+              <Table.Th>ID</Table.Th>
+              <Table.Th>状态</Table.Th>
+              <Table.Th>来源</Table.Th>
+              <Table.Th>摘要</Table.Th>
+              <Table.Th>媒体</Table.Th>
+              <Table.Th>更新</Table.Th>
             </Table.Tr>
-          )}
-        </Table.Tbody>
-      </Table>
+          </Table.Thead>
+          <Table.Tbody>
+            {items.map((row) => (
+              <Table.Tr key={row.id}>
+                {writable && (
+                  <Table.Td>
+                    <Checkbox
+                      checked={selected.includes(row.id)}
+                      onChange={(e) => toggle(row.id, e.currentTarget.checked)}
+                      disabled={['published', 'rejected', 'expired'].includes(row.status)}
+                    />
+                  </Table.Td>
+                )}
+                <Table.Td>
+                  <Text component={Link} to={`/reviews/${row.id}`} c="teal" fw={600}>
+                    #{row.id}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  <Badge color={reviewStatusColor(row.status)} variant="light">
+                    {reviewStatusLabel(row.status)}
+                  </Badge>
+                </Table.Td>
+                <Table.Td>
+                  {row.source_chat_id}/{row.source_message_id}
+                </Table.Td>
+                <Table.Td maw={360}>
+                  <Text lineClamp={1} size="sm">
+                    {row.final_text || '(空)'}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  {row.media_type} · {row.media_count}
+                </Table.Td>
+                <Table.Td>
+                  <Text size="xs" c="dimmed">
+                    {row.updated_at ?? '-'}
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+            {items.length === 0 && !query.error && (
+              <Table.Tr>
+                <Table.Td colSpan={writable ? 7 : 6}>
+                  <Text c="dimmed">暂无审核任务</Text>
+                </Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
+      )}
 
       {meta && meta.total_pages > 1 && (
         <Pagination value={page} onChange={setPage} total={meta.total_pages} />
