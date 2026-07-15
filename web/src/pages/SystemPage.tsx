@@ -10,6 +10,7 @@ import {
 } from '../api/system'
 import { useMe } from '../hooks/useAuth'
 import { useStatusEvents } from '../hooks/useStatusEvents'
+import { messageStatusLabel } from '../utils/labels'
 
 export function SystemPage() {
   const { data: user } = useMe()
@@ -60,7 +61,7 @@ export function SystemPage() {
         <div>
           <Title order={2}>系统状态</Title>
           <Text c="dimmed" size="sm">
-            SSE 实时状态 + 发布控制
+            实时状态推送与发布控制
           </Text>
         </div>
         <Badge color={paused ? 'orange' : 'teal'} variant="light">
@@ -93,11 +94,11 @@ export function SystemPage() {
         </Card>
         <Card withBorder>
           <Text size="xs" c="dimmed">
-            Listener / Bot
+            监听器 / Bot
           </Text>
           <Text fw={700}>
-            {data?.listener_running ? 'Listener OK' : 'Listener 离线'} ·{' '}
-            {data?.bot_available ? 'Bot OK' : 'Bot 离线'}
+            {data?.listener_running ? '监听器正常' : '监听器离线'} ·{' '}
+            {data?.bot_available ? 'Bot 正常' : 'Bot 离线'}
           </Text>
         </Card>
         <Card withBorder>
@@ -131,7 +132,7 @@ export function SystemPage() {
         <Group gap="sm">
           {Object.entries(data?.message_stats ?? {}).map(([k, v]) => (
             <Badge key={k} variant="outline">
-              {k}: {v}
+              {messageStatusLabel(k)}: {v}
             </Badge>
           ))}
           {Object.keys(data?.message_stats ?? {}).length === 0 && (

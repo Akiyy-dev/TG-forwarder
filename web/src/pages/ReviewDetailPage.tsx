@@ -34,6 +34,10 @@ import {
   canRejectTask,
   canWriteReviews,
 } from '../utils/reviewPermissions'
+import {
+  reviewActionLabel,
+  revisionSourceLabel,
+} from '../utils/labels'
 import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
 
 export function ReviewDetailPage() {
@@ -132,7 +136,7 @@ export function ReviewDetailPage() {
             <Badge color={reviewStatusColor(task.status)} variant="light">
               {reviewStatusLabel(task.status)}
             </Badge>
-            <Badge variant="outline">rev {task.revision}</Badge>
+            <Badge variant="outline">版本 {task.revision}</Badge>
           </Group>
           <Text c="dimmed" size="sm">
             来源 {task.source_chat_id}/{task.source_message_id}
@@ -338,7 +342,7 @@ export function ReviewDetailPage() {
               <Group key={rev.revision_number} justify="space-between" wrap="nowrap">
                 <div>
                   <Text size="sm" fw={600}>
-                    r{rev.revision_number} · {rev.source}
+                    r{rev.revision_number} · {revisionSourceLabel(rev.source)}
                   </Text>
                   <Text size="xs" c="dimmed" lineClamp={1}>
                     {rev.content}
@@ -368,7 +372,9 @@ export function ReviewDetailPage() {
           <Stack gap={6}>
             {(detail.data?.actions ?? []).map((a, idx) => (
               <Text key={idx} size="xs">
-                {a.created_at} · {a.action} · {a.old_status ?? '-'} → {a.new_status ?? '-'}
+                {a.created_at} · {reviewActionLabel(a.action)} ·{' '}
+                {a.old_status ? reviewStatusLabel(a.old_status) : '-'} →{' '}
+                {a.new_status ? reviewStatusLabel(a.new_status) : '-'}
               </Text>
             ))}
           </Stack>

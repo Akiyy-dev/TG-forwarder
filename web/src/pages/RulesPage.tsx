@@ -25,8 +25,13 @@ import {
   type RuleWrite,
 } from '../api/rules'
 import { useMe } from '../hooks/useAuth'
-
-const ACTIONS = ['flag', 'reject', 'require_review', 'replace', 'remove', 'add_tag']
+import {
+  HAS_MEDIA_PATTERN_OPTIONS,
+  RULE_ACTION_OPTIONS,
+  RULE_TYPE_OPTIONS,
+  ruleActionLabel,
+  ruleTypeLabel,
+} from '../utils/labels'
 
 export function RulesPage() {
   const { data: user } = useMe()
@@ -37,10 +42,12 @@ export function RulesPage() {
   const [testOpen, setTestOpen] = useState(false)
   const [testRuleId, setTestRuleId] = useState<number | null>(null)
   const [testSample, setTestSample] = useState('')
+  const [testMediaType, setTestMediaType] = useState('text')
   const [testResult, setTestResult] = useState<string | null>(null)
   const [form, setForm] = useState<RuleWrite>({
     name: '',
     pattern: '',
+    rule_type: 'keyword',
     action: 'flag',
     priority: 100,
     enabled: true,
@@ -54,8 +61,14 @@ export function RulesPage() {
     enabled: isAdmin,
   })
 
+  const isHasMedia = form.rule_type === 'has_media'
+
   const createMut = useMutation({
-    mutationFn: () => createRule(form),
+    mutationFn: () =>
+      createRule({
+        ...form,
+        pattern: isHasMedia ? form.pattern || 'has' : form.pattern,
+      }),
     onSuccess: async () => {
       setOpened(false)
       await qc.invalidateQueries({ queryKey: ['rules'] })
@@ -78,14 +91,29 @@ export function RulesPage() {
         <div>
           <Title order={2}>规则管理</Title>
           <Text c="dimmed" size="sm">
-            关键词 / 正则规则 CRUD 与测试
+            关键词 / 正则 / 媒体判断规则的增删改查与测试
           </Text>
         </div>
-        <Button onClick={() => setOpened(true)}>新建规则</Button>
+        <Button
+          onClick={() => {
+            setForm({
+              name: '',
+              pattern: '',
+              rule_type: 'keyword',
+              action: 'flag',
+              priority: 100,
+              enabled: true,
+              replacement: '',
+            })
+            setOpened(true)
+          }}
+        >
+          新建规则
+        </Button>
       </Group>
 
       <TextInput
-        placeholder="搜索名称或 pattern"
+        placeholder="搜索名称或匹配模式"
         value={q}
         onChange={(e) => setQ(e.currentTarget.value)}
         w={320}
@@ -96,7 +124,8 @@ export function RulesPage() {
         <Table.Thead>
           <Table.Tr>
             <Table.Th>名称</Table.Th>
-            <Table.Th>Pattern</Table.Th>
+            <Table.Th>类型</Table.Th>
+            <Table.Th>匹配模式</Table.Th>
             <Table.Th>动作</Table.Th>
             <Table.Th>优先级</Table.Th>
             <Table.Th>命中</Table.Th>
@@ -109,12 +138,19 @@ export function RulesPage() {
             <Table.Tr key={rule.id}>
               <Table.Td>{rule.name}</Table.Td>
               <Table.Td>
+                <Badge variant="outline">{ruleTypeLabel(rule.rule_type)}</Badge>
+              </Table.Td>
+              <Table.Td>
                 <Text size="sm" ff="monospace">
-                  {rule.pattern}
+                  {rule.rule_type === 'has_media'
+                    ? rule.pattern === 'none'
+                      ? '无媒体'
+                      : '有媒体'
+                    : rule.pattern}
                 </Text>
               </Table.Td>
               <Table.Td>
-                <Badge variant="light">{rule.action}</Badge>
+                <Badge variant="light">{ruleActionLabel(rule.action)}</Badge>
               </Table.Td>
               <Table.Td>{rule.priority}</Table.Td>
               <Table.Td>{rule.hit_count}</Table.Td>
@@ -137,6 +173,7 @@ export function RulesPage() {
                       setForm({
                         name: rule.name,
                         pattern: rule.pattern,
+                        rule_type: rule.rule_type,
                         action: rule.action,
                         replacement: rule.replacement,
                         priority: rule.priority,
@@ -144,6 +181,7 @@ export function RulesPage() {
                       })
                       setTestRuleId(rule.id)
                       setTestSample('')
+                      setTestMediaType('photo')
                       setTestResult(null)
                       setTestOpen(true)
                     }}
@@ -190,15 +228,37 @@ export function RulesPage() {
             onChange={(e) => setForm({ ...form, name: e.currentTarget.value })}
             required
           />
-          <TextInput
-            label="Pattern"
-            value={form.pattern}
-            onChange={(e) => setForm({ ...form, pattern: e.currentTarget.value })}
-            required
+          <Select
+            label="类型"
+            data={RULE_TYPE_OPTIONS}
+            value={form.rule_type ?? 'keyword'}
+            onChange={(v) => {
+              const ruleType = v ?? 'keyword'
+              setForm({
+                ...form,
+                rule_type: ruleType,
+                pattern: ruleType === 'has_media' ? 'has' : form.pattern,
+              })
+            }}
           />
+          {isHasMedia ? (
+            <Select
+              label="媒体条件"
+              data={HAS_MEDIA_PATTERN_OPTIONS}
+              value={form.pattern || 'has'}
+              onChange={(v) => setForm({ ...form, pattern: v ?? 'has' })}
+            />
+          ) : (
+            <TextInput
+              label="匹配模式"
+              value={form.pattern}
+              onChange={(e) => setForm({ ...form, pattern: e.currentTarget.value })}
+              required
+            />
+          )}
           <Select
             label="动作"
-            data={ACTIONS}
+            data={RULE_ACTION_OPTIONS}
             value={form.action}
             onChange={(v) => setForm({ ...form, action: v ?? 'flag' })}
           />
@@ -229,12 +289,24 @@ export function RulesPage() {
             onChange={(e) => setTestSample(e.currentTarget.value)}
             minRows={4}
           />
+          <Select
+            label="样例媒体类型"
+            data={[
+              { value: 'text', label: '文本' },
+              { value: 'photo', label: '图片' },
+              { value: 'video', label: '视频' },
+              { value: 'album', label: '相册' },
+              { value: 'sticker', label: '贴纸' },
+            ]}
+            value={testMediaType}
+            onChange={(v) => setTestMediaType(v ?? 'text')}
+          />
           <Button
             onClick={() => {
-              void testRule(testRuleId, testSample, form)
+              void testRule(testRuleId, testSample, form, testMediaType)
                 .then((res) =>
                   setTestResult(
-                    `matched=${res.matched}\nfinal_text=${res.final_text}\nhits=${JSON.stringify(res.hits)}`,
+                    `是否命中=${res.matched ? '是' : '否'}\n最终文本=${res.final_text}\n命中详情=${JSON.stringify(res.hits)}`,
                   ),
                 )
                 .catch((err: unknown) =>

@@ -6,7 +6,7 @@ import re
 import signal
 from collections.abc import Iterator
 
-from app.rules.types import MatchHit, MatchType, RuleDefinition
+from app.rules.types import MatchHit, MatchType, RuleDefinition, RuleType
 
 # Soft timeout for regex on platforms that support SIGALRM (not Windows).
 _REGEX_TIMEOUT_SECONDS = 0.05
@@ -19,9 +19,23 @@ class RuleValidationError(Exception):
         super().__init__(message)
 
 
+def normalize_has_media_pattern(pattern: str | None) -> str:
+    raw = (pattern or "has").strip().lower()
+    if raw in {"", "has", "true", "any", "yes", "1"}:
+        return "has"
+    if raw in {"none", "false", "no", "0", "empty", "text"}:
+        return "none"
+    return raw
+
+
 def validate_rule(rule: RuleDefinition) -> None:
     if not rule.name.strip():
         raise RuleValidationError("name is required")
+    if rule.rule_type == RuleType.HAS_MEDIA:
+        mode = normalize_has_media_pattern(rule.pattern)
+        if mode not in {"has", "none"}:
+            raise RuleValidationError("has_media pattern must be 'has' or 'none'")
+        return
     if not rule.pattern:
         raise RuleValidationError("pattern is required")
     if len(rule.pattern) > _MAX_PATTERN_LEN:
@@ -31,6 +45,31 @@ def validate_rule(rule: RuleDefinition) -> None:
             re.compile(rule.pattern)
         except re.error as exc:
             raise RuleValidationError(f"invalid regex: {exc}") from exc
+
+
+def message_has_media(*, media_type: str | None, media_count: int = 0) -> bool:
+    """True when the message carries non-text media (stickers count as media)."""
+    if media_count > 0:
+        return True
+    if not media_type:
+        return False
+    return media_type not in {"text", "unsupported"}
+
+
+def find_has_media_matches(
+    rule: RuleDefinition,
+    *,
+    media_type: str | None,
+    media_count: int = 0,
+) -> list[MatchHit]:
+    validate_rule(rule)
+    mode = normalize_has_media_pattern(rule.pattern)
+    present = message_has_media(media_type=media_type, media_count=media_count)
+    matched = present if mode == "has" else not present
+    if not matched:
+        return []
+    label = "has_media" if present else "no_media"
+    return [MatchHit(0, 0, label)]
 
 
 def _whole_word_bounds(text: str, start: int, end: int) -> bool:

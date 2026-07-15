@@ -77,6 +77,8 @@ class Settings(BaseSettings):
 
     source_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
     database_url: str = "sqlite+aiosqlite:///./data/database/app.db"
+    channels_config_path: str = "./config/channels.yaml"
+    rules_config_path: str = "./config/rules.yaml"
 
     download_dir: str = "./data/downloads"
     max_download_size_mb: int = 100
@@ -166,8 +168,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_required(self) -> Settings:
-        if not self.source_channels:
-            msg = "SOURCE_CHANNELS must contain at least one channel username or id"
+        from app.config_files import load_channels_config
+
+        if not self.source_channels and not load_channels_config(self.channels_config_path):
+            msg = (
+                "SOURCE_CHANNELS must contain at least one channel, "
+                "or provide non-empty channels in the channels config file"
+            )
             raise ValueError(msg)
         if not self.bot_admin_ids:
             msg = "BOT_ADMIN_IDS must contain at least one Telegram user id"

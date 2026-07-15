@@ -108,6 +108,48 @@ class ChannelService:
         self._apply_cache(channels)
         logger.info("channels_synced", count=len(self._enabled_ids))
 
+    async def sync_from_config_rows(self, rows: list[dict[str, Any]]) -> int:
+        """Upsert channels from resolved config-file rows.
+
+        Expected keys: chat_id, username?, title?, enabled?, publish_mode?, target_chat_id?
+        """
+        if not rows:
+            return 0
+        async with self.session_factory() as session:
+            repo = ChannelRepository(session)
+            for row in rows:
+                chat_id = int(row["chat_id"])
+                existing = await repo.get_by_chat_id(chat_id)
+                mode = row.get("publish_mode")
+                enabled = row.get("enabled")
+                await repo.upsert(
+                    chat_id=chat_id,
+                    username=row.get("username"),
+                    title=row.get("title"),
+                    enabled=(
+                        bool(enabled)
+                        if enabled is not None
+                        else (True if existing is None else existing.enabled)
+                    ),
+                    target_channel_id=(
+                        int(row["target_chat_id"])
+                        if row.get("target_chat_id") is not None
+                        else (
+                            self.settings.target_channel_id
+                            if existing is None or existing.target_channel_id is None
+                            else existing.target_channel_id
+                        )
+                    ),
+                    publish_mode=(
+                        None if existing is not None else (mode or PublishMode.REVIEW.value)
+                    ),
+                )
+            await session.commit()
+            channels = await repo.list_all()
+        self._apply_cache(channels)
+        logger.info("channels_synced_from_file", count=len(rows))
+        return len(rows)
+
     async def load_from_db(self) -> None:
         async with self.session_factory() as session:
             repo = ChannelRepository(session)

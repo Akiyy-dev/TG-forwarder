@@ -45,7 +45,7 @@ class RuleOut(APIModel):
 
 class RuleWriteRequest(APIModel):
     name: str = Field(min_length=1, max_length=128)
-    pattern: str = Field(min_length=1, max_length=500)
+    pattern: str = Field(default="", max_length=500)
     description: str | None = Field(default=None, max_length=512)
     enabled: bool = True
     priority: int = 100
@@ -65,7 +65,7 @@ class RuleWriteRequest(APIModel):
 
 class RulePatchRequest(APIModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    pattern: str | None = Field(default=None, min_length=1, max_length=500)
+    pattern: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=512)
     enabled: bool | None = None
     priority: int | None = None
@@ -85,6 +85,8 @@ class RulePatchRequest(APIModel):
 
 class RuleTestRequest(APIModel):
     sample_text: str = Field(min_length=0, max_length=8192)
+    sample_media_type: str | None = Field(default=None, max_length=32)
+    sample_media_count: int = Field(default=0, ge=0, le=100)
     rule: RuleWriteRequest | None = None
 
 
@@ -195,7 +197,12 @@ async def test_rule_payload(
     if body.rule is None:
         raise AppError("validation_error", "rule payload is required", status_code=422)
     try:
-        result = await _svc(ctx).test_payload(body.rule.model_dump(), body.sample_text)
+        result = await _svc(ctx).test_payload(
+            body.rule.model_dump(),
+            body.sample_text,
+            sample_media_type=body.sample_media_type,
+            sample_media_count=body.sample_media_count,
+        )
     except RulesServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=result)
@@ -262,7 +269,12 @@ async def test_existing_rule(
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[dict[str, Any]]:
     try:
-        result = await _svc(ctx).test_existing(rule_id, body.sample_text)
+        result = await _svc(ctx).test_existing(
+            rule_id,
+            body.sample_text,
+            sample_media_type=body.sample_media_type,
+            sample_media_count=body.sample_media_count,
+        )
     except RulesServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=result)

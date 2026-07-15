@@ -10,6 +10,7 @@ import {
   Title,
 } from '@mantine/core'
 import { useDashboard } from '../hooks/useDashboard'
+import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
 
 function StatCard({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
   return (
@@ -64,8 +65,8 @@ export function DashboardPage() {
         <StatCard
           label="组件"
           value={[
-            service?.listener_running ? 'Listener' : 'Listener×',
-            service?.bot_available ? 'Bot' : 'Bot×',
+            service?.listener_running ? '监听器正常' : '监听器离线',
+            service?.bot_available ? 'Bot 正常' : 'Bot 离线',
           ].join(' · ')}
         />
       </SimpleGrid>
@@ -101,7 +102,9 @@ export function DashboardPage() {
               <Table.Tr key={row.id}>
                 <Table.Td>{row.id}</Table.Td>
                 <Table.Td>
-                  <Badge variant="light">{row.status}</Badge>
+                  <Badge color={reviewStatusColor(row.status)} variant="light">
+                    {reviewStatusLabel(row.status)}
+                  </Badge>
                 </Table.Td>
                 <Table.Td>
                   {row.source_chat_id}/{row.source_message_id}

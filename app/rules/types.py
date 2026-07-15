@@ -13,6 +13,7 @@ class RuleType(StrEnum):
     LINK = "link"
     DOMAIN = "domain"
     REGEX = "regex"
+    HAS_MEDIA = "has_media"
 
 
 class MatchType(StrEnum):

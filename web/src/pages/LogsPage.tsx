@@ -6,6 +6,13 @@ import {
   listReviewActionLogs,
   listRuleExecutionLogs,
 } from '../api/system'
+import {
+  logColumnLabel,
+  messageStatusLabel,
+  reviewActionLabel,
+  ruleActionLabel,
+} from '../utils/labels'
+import { reviewStatusLabel } from '../utils/reviewStatus'
 
 export function LogsPage() {
   const [tab, setTab] = useState<string | null>('review')
@@ -27,8 +34,7 @@ export function LogsPage() {
     enabled: tab === 'rules',
   })
 
-  const active =
-    tab === 'processing' ? processing : tab === 'rules' ? rules : review
+  const active = tab === 'processing' ? processing : tab === 'rules' ? rules : review
 
   return (
     <Stack gap="md">
@@ -56,6 +62,7 @@ export function LogsPage() {
           <LogTable
             columns={['id', 'review_task_id', 'action', 'old_status', 'new_status', 'created_at']}
             rows={(review.data?.items ?? []) as Array<Record<string, unknown>>}
+            formatValue={formatReviewCell}
           />
         </Tabs.Panel>
         <Tabs.Panel value="processing" pt="md">
@@ -69,22 +76,20 @@ export function LogsPage() {
               'created_at',
             ]}
             rows={(processing.data?.items ?? []) as Array<Record<string, unknown>>}
+            formatValue={formatProcessingCell}
           />
         </Tabs.Panel>
         <Tabs.Panel value="rules" pt="md">
           <LogTable
             columns={['id', 'rule_name', 'action', 'matched_text', 'review_task_id', 'created_at']}
             rows={(rules.data?.items ?? []) as Array<Record<string, unknown>>}
+            formatValue={formatRuleCell}
           />
         </Tabs.Panel>
       </Tabs>
 
       {(active.data?.meta.total_pages ?? 0) > 1 && (
-        <Pagination
-          value={page}
-          onChange={setPage}
-          total={active.data?.meta.total_pages ?? 1}
-        />
+        <Pagination value={page} onChange={setPage} total={active.data?.meta.total_pages ?? 1} />
       )}
     </Stack>
   )
@@ -93,16 +98,18 @@ export function LogsPage() {
 function LogTable({
   columns,
   rows,
+  formatValue,
 }: {
   columns: string[]
   rows: Array<Record<string, unknown>>
+  formatValue: (column: string, value: unknown) => string
 }) {
   return (
     <Table striped withTableBorder highlightOnHover>
       <Table.Thead>
         <Table.Tr>
           {columns.map((c) => (
-            <Table.Th key={c}>{c}</Table.Th>
+            <Table.Th key={c}>{logColumnLabel(c)}</Table.Th>
           ))}
         </Table.Tr>
       </Table.Thead>
@@ -111,7 +118,7 @@ function LogTable({
           <Table.Tr key={idx}>
             {columns.map((c) => (
               <Table.Td key={c}>
-                <Text size="xs">{formatCell(row[c])}</Text>
+                <Text size="xs">{formatValue(c, row[c])}</Text>
               </Table.Td>
             ))}
           </Table.Tr>
@@ -128,8 +135,27 @@ function LogTable({
   )
 }
 
-function formatCell(value: unknown): string {
+function formatDefault(value: unknown): string {
   if (value == null) return '-'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
+}
+
+function formatReviewCell(column: string, value: unknown): string {
+  if (value == null) return '-'
+  if (column === 'action') return reviewActionLabel(String(value))
+  if (column === 'old_status' || column === 'new_status') return reviewStatusLabel(String(value))
+  return formatDefault(value)
+}
+
+function formatProcessingCell(column: string, value: unknown): string {
+  if (value == null) return '-'
+  if (column === 'status') return messageStatusLabel(String(value))
+  return formatDefault(value)
+}
+
+function formatRuleCell(column: string, value: unknown): string {
+  if (value == null) return '-'
+  if (column === 'action') return ruleActionLabel(String(value))
+  return formatDefault(value)
 }

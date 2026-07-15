@@ -64,7 +64,7 @@ export async function apiRequest<T>(
   try {
     payload = await response.json()
   } catch {
-    throw new ApiError(response.status, 'invalid_response', 'Invalid JSON response')
+    throw new ApiError(response.status, 'invalid_response', '响应不是有效的 JSON')
   }
 
   if (!response.ok || payload.ok === false) {
@@ -72,7 +72,7 @@ export async function apiRequest<T>(
     throw new ApiError(
       response.status,
       err?.code ?? 'request_failed',
-      err?.message ?? `Request failed (${response.status})`,
+      err?.message ?? `请求失败（${response.status}）`,
       err?.details,
     )
   }

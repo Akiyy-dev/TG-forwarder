@@ -1,0 +1,16 @@
+# 频道种子配置（启动时 upsert 进数据库；Web 可继续热改）
+# 复制为 config/channels.yaml 后按需修改。
+#
+# username 或 chat_id 二选一（可同时给 username 作展示）
+# publish_mode: review | auto | rule_based | paused
+
+channels:
+  - username: example_channel
+    enabled: true
+    publish_mode: review
+    # target_chat_id: -1001234567890
+    # title: Example Source
+
+  # - chat_id: -1002491286349
+  #   enabled: true
+  #   publish_mode: review

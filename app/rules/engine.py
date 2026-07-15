@@ -5,8 +5,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.rules.matcher import RuleValidationError, apply_replacements, find_matches, validate_rule
-from app.rules.types import RuleAction, RuleApplyResult, RuleDefinition
+from app.rules.matcher import (
+    RuleValidationError,
+    apply_replacements,
+    find_has_media_matches,
+    find_matches,
+    validate_rule,
+)
+from app.rules.types import RuleAction, RuleApplyResult, RuleDefinition, RuleType
 
 
 def rule_applies(
@@ -32,6 +38,7 @@ def apply_rules(
     source_chat_id: int | None = None,
     target_chat_id: int | None = None,
     media_type: str | None = None,
+    media_count: int = 0,
 ) -> RuleApplyResult:
     ordered = sorted(rules, key=lambda r: (r.priority, r.id or 0))
     current = text
@@ -48,7 +55,14 @@ def apply_rules(
         started = time.perf_counter()
         try:
             validate_rule(rule)
-            hits = find_matches(current, rule)
+            if rule.rule_type == RuleType.HAS_MEDIA:
+                hits = find_has_media_matches(
+                    rule,
+                    media_type=media_type,
+                    media_count=media_count,
+                )
+            else:
+                hits = find_matches(current, rule)
         except RuleValidationError as exc:
             result.hits.append(
                 {
@@ -104,8 +118,25 @@ def apply_rules(
     return result
 
 
-def preview_rule(rule: RuleDefinition, sample_text: str) -> dict[str, Any]:
+def preview_rule(
+    rule: RuleDefinition,
+    sample_text: str,
+    *,
+    sample_media_type: str | None = None,
+    sample_media_count: int = 0,
+) -> dict[str, Any]:
     validate_rule(rule)
+    if rule.rule_type == RuleType.HAS_MEDIA:
+        hits = find_has_media_matches(
+            rule,
+            media_type=sample_media_type or "text",
+            media_count=sample_media_count,
+        )
+        return {
+            "matched": bool(hits),
+            "hits": [{"start": h.start, "end": h.end, "text": h.matched_text} for h in hits],
+            "final_text": sample_text,
+        }
     hits = find_matches(sample_text, rule)
     after = sample_text
     if rule.action == RuleAction.REPLACE:

@@ -22,6 +22,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "pwdlib[argon2]>=0.2.0",
     "httpx>=0.27.0",
+    "PyYAML>=6.0.2",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,7 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "types-aiofiles",
+    "types-PyYAML",
 ]
 
 [project.scripts]

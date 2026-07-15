@@ -1,0 +1,22 @@
+# 规则种子配置（启动时按 name upsert 进数据库；不会删除 Web 新建的规则）
+# 复制为 config/rules.yaml 后按需修改。
+
+rules:
+  - name: media-require-review
+    description: 有媒体附件时进入人工审核
+    enabled: true
+    priority: 50
+    rule_type: has_media
+    pattern: has
+    action: require_review
+    stop_processing: false
+
+  - name: block-spam-keyword
+    description: 示例关键词拒绝
+    enabled: false
+    priority: 100
+    rule_type: keyword
+    match_type: contains
+    pattern: spam-example
+    action: reject
+    case_sensitive: false

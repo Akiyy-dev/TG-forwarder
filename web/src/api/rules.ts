@@ -82,15 +82,16 @@ export async function testRule(
   id: number | null,
   sample_text: string,
   rule?: RuleWrite,
+  sample_media_type?: string,
 ): Promise<{ matched: boolean; hits: unknown[]; final_text: string }> {
   if (id != null) {
     return apiRequest(`/api/v1/rules/${id}/test`, {
       method: 'POST',
-      body: JSON.stringify({ sample_text }),
+      body: JSON.stringify({ sample_text, sample_media_type }),
     })
   }
   return apiRequest('/api/v1/rules/test', {
     method: 'POST',
-    body: JSON.stringify({ sample_text, rule }),
+    body: JSON.stringify({ sample_text, sample_media_type, rule }),
   })
 }

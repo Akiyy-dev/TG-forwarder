@@ -49,6 +49,7 @@ class RuleEngineProcessor:
             source_chat_id=message.source_chat_id,
             target_chat_id=context.target_chat_id,
             media_type=message.media_type.value,
+            media_count=len(message.media_items or []),
         )
         message.text = applied.text
         context.extra["matched_rules"] = applied.hits

@@ -196,7 +196,22 @@ npm run dev          # http://localhost:5173 ，/api 代理到 8000
 npm run build        # 输出 web/dist ，由后端同源挂载
 ```
 
-主要页面：仪表盘、审核队列/详情、规则管理、频道发布模式、系统状态（SSE）、日志审计。角色：`viewer` 只读，`reviewer` 审核，`super_admin` 管理规则/频道/系统。
+主要页面：仪表盘、审核队列/详情、规则管理、频道发布模式、系统状态（实时推送）、日志审计。角色：只读 / 审核员 / 超级管理员。
+
+### 频道与规则配置文件
+
+启动时可从独立 YAML 种子同步进 SQLite（**文件 → DB 单向**；Web 热改不会自动写回文件）：
+
+| 文件 | 说明 |
+|------|------|
+| `config/channels.yaml` | 来源频道种子（见 `config/channels.example.yaml`） |
+| `config/rules.yaml` | 规则种子（见 `config/rules.example.yaml`），含 `has_media` 媒体判断类型 |
+
+- 若 `channels.yaml` 有非空条目，优先于 `SOURCE_CHANNELS`
+- 规则按 `name` upsert，不会删除库中额外规则
+- 环境变量：`CHANNELS_CONFIG_PATH` / `RULES_CONFIG_PATH`
+
+媒体判断规则示例：`rule_type: has_media`，`pattern: has|none`，动作为 `require_review` / `reject` 等。
 
 ## 常见错误
 

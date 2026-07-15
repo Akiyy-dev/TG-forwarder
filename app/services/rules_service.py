@@ -8,11 +8,15 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.config_files import load_rules_config
 from app.database.models import KeywordRule, RuleExecutionLog, RuleGroup
+from app.logging import get_logger
 from app.rules.engine import apply_rules, preview_rule
 from app.rules.loader import load_enabled_rules, rule_row_to_definition
-from app.rules.matcher import RuleValidationError, validate_rule
+from app.rules.matcher import RuleValidationError, normalize_has_media_pattern, validate_rule
 from app.rules.types import MatchType, RuleAction, RuleApplyResult, RuleDefinition, RuleType
+
+logger = get_logger(__name__)
 
 
 class RulesServiceError(Exception):
@@ -31,11 +35,15 @@ class RulesService:
         data: dict[str, Any], *, rule_id: int | None = None
     ) -> RuleDefinition:
         try:
+            rule_type = RuleType(data.get("rule_type", RuleType.KEYWORD))
+            pattern = str(data.get("pattern") or "")
+            if rule_type == RuleType.HAS_MEDIA:
+                pattern = normalize_has_media_pattern(pattern)
             definition = RuleDefinition(
                 id=rule_id,
                 name=str(data["name"]),
-                pattern=str(data["pattern"]),
-                rule_type=RuleType(data.get("rule_type", RuleType.KEYWORD)),
+                pattern=pattern,
+                rule_type=rule_type,
                 match_type=MatchType(data.get("match_type", MatchType.CONTAINS)),
                 action=RuleAction(data.get("action", RuleAction.FLAG)),
                 replacement=str(data.get("replacement") or ""),
@@ -218,16 +226,40 @@ class RulesService:
             await session.refresh(copy)
             return copy
 
-    async def test_payload(self, data: dict[str, Any], sample_text: str) -> dict[str, Any]:
+    async def test_payload(
+        self,
+        data: dict[str, Any],
+        sample_text: str,
+        *,
+        sample_media_type: str | None = None,
+        sample_media_count: int = 0,
+    ) -> dict[str, Any]:
         definition = self._definition_from_payload(data)
-        return preview_rule(definition, sample_text)
+        return preview_rule(
+            definition,
+            sample_text,
+            sample_media_type=sample_media_type,
+            sample_media_count=sample_media_count,
+        )
 
-    async def test_existing(self, rule_id: int, sample_text: str) -> dict[str, Any]:
+    async def test_existing(
+        self,
+        rule_id: int,
+        sample_text: str,
+        *,
+        sample_media_type: str | None = None,
+        sample_media_count: int = 0,
+    ) -> dict[str, Any]:
         async with self.session_factory() as session:
             rule = await session.get(KeywordRule, rule_id)
             if rule is None:
                 raise RulesServiceError("rule not found", code="not_found")
-            return preview_rule(rule_row_to_definition(rule), sample_text)
+            return preview_rule(
+                rule_row_to_definition(rule),
+                sample_text,
+                sample_media_type=sample_media_type,
+                sample_media_count=sample_media_count,
+            )
 
     async def export_rules(self) -> list[dict[str, Any]]:
         async with self.session_factory() as session:
@@ -270,6 +302,29 @@ class RulesService:
         for item in items:
             created.append(await self.create_rule(item, created_by=created_by))
         return created
+
+    async def sync_from_file(self, path: str, *, created_by: int | None = None) -> int:
+        """Upsert rules from YAML seed file by unique name. Does not delete extras."""
+        items = load_rules_config(path)
+        if not items:
+            return 0
+        count = 0
+        for item in items:
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            async with self.session_factory() as session:
+                existing = (
+                    await session.execute(select(KeywordRule).where(KeywordRule.name == name))
+                ).scalar_one_or_none()
+            if existing is None:
+                await self.create_rule(item, created_by=created_by)
+            else:
+                patch = {k: v for k, v in item.items() if k != "name"}
+                await self.update_rule(existing.id, patch)
+            count += 1
+        logger.info("rules_synced_from_file", count=count, path=path)
+        return count
 
     async def list_groups(self) -> list[RuleGroup]:
         async with self.session_factory() as session:

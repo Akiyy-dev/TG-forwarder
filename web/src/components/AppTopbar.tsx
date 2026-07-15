@@ -9,6 +9,7 @@ import {
 import { useDashboard } from '../hooks/useDashboard'
 import { useLogout, useMe } from '../hooks/useAuth'
 import { useStatusEvents } from '../hooks/useStatusEvents'
+import { roleLabel } from '../utils/labels'
 
 export function AppTopbar() {
   const { data: user } = useMe()
@@ -36,7 +37,7 @@ export function AppTopbar() {
           <ActionIcon
             variant="subtle"
             onClick={() => setColorScheme(colorScheme === 'dark' ? 'light' : 'dark')}
-            aria-label="toggle color scheme"
+            aria-label="切换配色"
           >
             <Text size="xs">{colorScheme === 'dark' ? '亮' : '暗'}</Text>
           </ActionIcon>
@@ -45,7 +46,7 @@ export function AppTopbar() {
           {user?.username}
           <Text span c="dimmed" size="xs">
             {' '}
-            · {user?.role}
+            · {roleLabel(user?.role)}
           </Text>
         </Text>
         <Text

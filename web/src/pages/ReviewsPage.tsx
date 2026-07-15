@@ -21,6 +21,7 @@ import { ApiError } from '../api/client'
 import { batchPublish, batchReject, listReviews } from '../api/reviews'
 import { useMe } from '../hooks/useAuth'
 import { canWriteReviews } from '../utils/reviewPermissions'
+import { mediaTypeLabel } from '../utils/labels'
 import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
 
 const STATUS_ALL = 'all'
@@ -109,7 +110,7 @@ export function ReviewsPage() {
         />
         <TextInput
           label="搜索文本"
-          placeholder="匹配 final_text"
+          placeholder="匹配正文文本"
           value={q}
           onChange={(e) => {
             setQ(e.currentTarget.value)
@@ -185,7 +186,7 @@ export function ReviewsPage() {
                   </Text>
                 </Table.Td>
                 <Table.Td>
-                  {row.media_type} · {row.media_count}
+                  {mediaTypeLabel(row.media_type)} · {row.media_count}
                 </Table.Td>
                 <Table.Td>
                   <Text size="xs" c="dimmed">

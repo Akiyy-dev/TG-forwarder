@@ -62,6 +62,59 @@ async def resolve_source_channels(
     return resolved
 
 
+async def resolve_channel_config_entries(
+    settings: Settings,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve config/channels.yaml entries to chat ids via Telethon when needed."""
+    client = TelegramClient(
+        settings.telegram_session_path,
+        settings.telegram_api_id,
+        settings.telegram_api_hash,
+    )
+    resolved: list[dict[str, Any]] = []
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            msg = "Session not authorized; run python -m scripts.create_session first"
+            raise RuntimeError(msg)
+        for entry in entries:
+            chat_id = entry.get("chat_id")
+            username = entry.get("username")
+            title = entry.get("title")
+            if chat_id is None:
+                ref = username or entry.get("ref")
+                if not ref:
+                    logger.warning("channel_config_entry_skipped_missing_id")
+                    continue
+                parsed = parse_channel_ref(str(ref) if str(ref).startswith("@") else f"@{ref}")
+                entity = await client.get_entity(parsed)
+                chat_id = int(entity.id)
+                if isinstance(entity, Channel) and chat_id > 0:
+                    chat_id = int(f"-100{chat_id}")
+                username = getattr(entity, "username", None) or username
+                title = title or getattr(entity, "title", None)
+            else:
+                chat_id = int(chat_id)
+            row = {
+                "chat_id": chat_id,
+                "username": username,
+                "title": title,
+                "enabled": entry.get("enabled"),
+                "publish_mode": entry.get("publish_mode"),
+                "target_chat_id": entry.get("target_chat_id"),
+            }
+            resolved.append(row)
+            logger.info(
+                "channel_resolved",
+                source_chat_id=chat_id,
+                username=username,
+            )
+    finally:
+        await client.disconnect()
+    return resolved
+
+
 async def run_app() -> None:
     settings = get_settings()
     setup_logging(settings.log_level, json_logs=settings.app_env != "development")
@@ -74,8 +127,20 @@ async def run_app() -> None:
     auth_service = AuthService(settings, session_factory)
     await auth_service.ensure_bootstrap_admin()
 
-    resolved = await resolve_source_channels(settings)
-    await channel_service.sync_from_settings(resolved)
+    from app.config_files import load_channels_config
+    from app.services.rules_service import RulesService
+
+    file_entries = load_channels_config(settings.channels_config_path)
+    if file_entries:
+        rows = await resolve_channel_config_entries(settings, file_entries)
+        await channel_service.sync_from_config_rows(rows)
+    else:
+        resolved = await resolve_source_channels(settings)
+        await channel_service.sync_from_settings(resolved)
+
+    rules_synced = await RulesService(session_factory).sync_from_file(settings.rules_config_path)
+    if rules_synced:
+        logger.info("rules_seed_applied", count=rules_synced)
 
     bot = create_bot(settings.bot_token)
     publisher = TelegramPublisher(
