@@ -250,6 +250,9 @@ class MessageService:
         # Download media
         try:
             message = await self.media_service.materialize(message, item.raw_messages)
+            if self.media_service.media_missing(message):
+                msg = "media incomplete after download"
+                raise FileNotFoundError(msg)
         except Exception as exc:
             await self._mark_failed(message, exc, record_id)
             return
@@ -509,7 +512,6 @@ class MessageService:
                     MessageStatus.PUBLISHING.value,
                     MessageStatus.PROCESSING.value,
                     MessageStatus.RECEIVED.value,
-                    MessageStatus.COLLECTING_ALBUM.value,
                 ],
                 limit=200,
             )

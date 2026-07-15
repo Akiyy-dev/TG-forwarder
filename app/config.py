@@ -82,8 +82,8 @@ class Settings(BaseSettings):
     max_download_size_mb: int = 100
     temp_file_ttl_minutes: int = 60
 
-    album_wait_seconds: float = 1.5
-    album_max_wait_seconds: float = 8.0
+    album_wait_seconds: float = 2.5
+    album_max_wait_seconds: float = 20.0
     queue_maxsize: int = 1000
     max_concurrency: int = 3
 

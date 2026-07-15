@@ -29,8 +29,8 @@ class TelegramListener:
         session_path: str,
         source_chat_ids: Iterable[int],
         on_message: MessageHandler,
-        album_wait_seconds: float = 1.5,
-        album_max_wait_seconds: float = 8.0,
+        album_wait_seconds: float = 2.5,
+        album_max_wait_seconds: float = 20.0,
         target_channel_id: int | None = None,
     ) -> None:
         self.api_id = api_id
@@ -69,8 +69,14 @@ class TelegramListener:
         self._running = True
         self._connected = True
 
-        @self.client.on(events.NewMessage(chats=list(self.source_chat_ids) or None))
-        async def _handler(event: events.NewMessage.Event) -> None:
+        chats = list(self.source_chat_ids) or None
+
+        @self.client.on(events.Album(chats=chats))
+        async def _album_handler(event: events.Album.Event) -> None:
+            await self._handle_album(event)
+
+        @self.client.on(events.NewMessage(chats=chats))
+        async def _message_handler(event: events.NewMessage.Event) -> None:
             await self._handle_event(event)
 
         logger.info(
@@ -99,33 +105,94 @@ class TelegramListener:
         self._connected = False
         logger.info("listener_stopped")
 
+    def _chat_allowed(self, chat: Channel) -> tuple[bool, int, int]:
+        chat_id = int(chat.id)
+        full_id = int(f"-100{chat_id}") if chat_id > 0 else chat_id
+        allowed = self.source_chat_ids
+        ok = not allowed or chat_id in allowed or full_id in allowed
+        return ok, chat_id, full_id
+
+    async def _normalize_message(
+        self,
+        message: Message,
+        chat: Channel,
+        *,
+        full_id: int,
+    ) -> NormalizedMessage:
+        normalized = normalize_telethon_message(
+            message,
+            chat_username=getattr(chat, "username", None),
+            chat_title=getattr(chat, "title", None),
+            target_chat_id=self.target_channel_id,
+        )
+        if full_id < 0:
+            normalized.source_chat_id = full_id
+        return normalized
+
+    async def _handle_album(self, event: events.Album.Event) -> None:
+        """Telethon delivers the full media group once — preferred album path."""
+        try:
+            chat = await event.get_chat()
+            if not isinstance(chat, Channel) or not getattr(chat, "broadcast", False):
+                return
+            ok, _chat_id, full_id = self._chat_allowed(chat)
+            if not ok:
+                return
+
+            parts: list[NormalizedMessage] = []
+            for message in event.messages:
+                if not isinstance(message, Message):
+                    continue
+                parts.append(await self._normalize_message(message, chat, full_id=full_id))
+            if not parts:
+                return
+
+            album = AlbumCollector.merge(parts)
+            logger.info(
+                "album_event_received",
+                source_chat_id=album.source_chat_id,
+                grouped_id=album.grouped_id,
+                count=len(album.media_items),
+            )
+            await self._emit(album)
+        except FloodWaitError as exc:
+            self._last_error = "FloodWaitError"
+            logger.warning(
+                "listener_flood_wait",
+                exception_type="FloodWaitError",
+                seconds=exc.seconds,
+            )
+            await asyncio.sleep(exc.seconds + 1)
+        except RPCError as exc:
+            self._last_error = type(exc).__name__
+            logger.exception(
+                "listener_rpc_error",
+                exception_type=type(exc).__name__,
+            )
+        except Exception as exc:
+            self._last_error = type(exc).__name__
+            logger.exception(
+                "listener_album_error",
+                exception_type=type(exc).__name__,
+            )
+
     async def _handle_event(self, event: events.NewMessage.Event) -> None:
         try:
             message = event.message
             if not isinstance(message, Message):
                 return
+            # Media-group parts are owned by events.Album to avoid incomplete flushes.
+            if getattr(message, "grouped_id", None) is not None:
+                return
+
             chat = await event.get_chat()
             if not isinstance(chat, Channel) or not getattr(chat, "broadcast", False):
-                # Ignore non-channel posts
                 return
-            chat_id = int(chat.id)
-            # Normalize to -100 form used by Bot API when needed
-            full_id = int(f"-100{chat_id}") if chat_id > 0 else chat_id
-
-            allowed = self.source_chat_ids
-            if allowed and chat_id not in allowed and full_id not in allowed:
+            ok, _chat_id, full_id = self._chat_allowed(chat)
+            if not ok:
                 return
 
-            normalized = normalize_telethon_message(
-                message,
-                chat_username=getattr(chat, "username", None),
-                chat_title=getattr(chat, "title", None),
-                target_chat_id=self.target_channel_id,
-            )
-            # Prefer full -100 chat id for consistency with Bot API
-            if full_id < 0:
-                normalized.source_chat_id = full_id
-
+            normalized = await self._normalize_message(message, chat, full_id=full_id)
             ready = await self.album_collector.add(normalized)
             if ready is not None:
                 await self._emit(ready)
