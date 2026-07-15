@@ -49,7 +49,9 @@ class MediaService:
 
     @staticmethod
     def _path_ok(path: str | None) -> bool:
-        return bool(path) and Path(path).is_file()
+        if not path:
+            return False
+        return Path(path).is_file()
 
     def media_missing(self, message: NormalizedMessage) -> bool:
         if message.media_type in {MediaType.TEXT, MediaType.UNSUPPORTED, MediaType.STICKER}:
