@@ -109,8 +109,12 @@ class ReviewPublishService:
                     }
             return {"status": "conflict", "already_published": False}
 
-        target = claimed.target_chat_id
-        if target is None:
+        targets: list[int] = []
+        if claimed.target_chat_ids:
+            targets = [int(x) for x in claimed.target_chat_ids if x is not None]
+        elif claimed.target_chat_id is not None:
+            targets = [int(claimed.target_chat_id)]
+        if not targets:
             await self.review_service.transition(
                 claimed.id,
                 ReviewStatus.FAILED,
@@ -145,7 +149,24 @@ class ReviewPublishService:
 
         try:
             message = await self.ensure_task_media(claimed)
-            ids = await self.publisher.publish(message, int(target))
+            all_ids: list[int] = []
+            per_target: dict[str, Any] = {}
+            errors: list[dict[str, Any]] = []
+            for target in targets:
+                try:
+                    ids = await self.publisher.publish(message, int(target))
+                    all_ids.extend(ids)
+                    per_target[str(target)] = {"ok": True, "message_ids": ids}
+                except Exception as exc:  # noqa: BLE001
+                    summary = exception_summary(exc)
+                    per_target[str(target)] = {"ok": False, "error": summary}
+                    errors.append({"target_chat_id": target, **summary})
+            if len(errors) == len(targets):
+                raise RuntimeError(errors[0]["message"] if errors else "publish failed")
+            ids = all_ids
+            publish_detail = {"target_message_ids": ids, "per_target": per_target}
+            if errors:
+                publish_detail["partial_errors"] = errors
         except Exception as exc:
             summary = exception_summary(exc)
             await self.review_service.transition(
@@ -181,7 +202,7 @@ class ReviewPublishService:
             user_id=user_id,
             action=ReviewActionType.PUBLISHED,
             expected_revision=claimed.revision,
-            detail={"target_message_ids": ids},
+            detail=publish_detail,
         )
         async with self.session_factory() as session:
             processed = await session.get(ProcessedMessage, claimed.processed_message_id)
@@ -198,4 +219,6 @@ class ReviewPublishService:
             "status": ReviewStatus.PUBLISHED.value,
             "already_published": False,
             "target_message_ids": ids,
+            "per_target": per_target,
+            "partial_errors": errors or None,
         }

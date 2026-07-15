@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
+import { listChannels } from '../api/channels'
 import { batchPublish, batchReject, listReviews } from '../api/reviews'
 import { useMe } from '../hooks/useAuth'
 import { canWriteReviews } from '../utils/reviewPermissions'
@@ -42,18 +43,26 @@ export function ReviewsPage() {
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<string | null>(STATUS_ALL)
+  const [sourceChatId, setSourceChatId] = useState<string | null>('all')
   const [q, setQ] = useState('')
   const [selected, setSelected] = useState<number[]>([])
   const [confirm, setConfirm] = useState<'publish' | 'reject' | null>(null)
 
+  const channels = useQuery({
+    queryKey: ['channels', 'filter'],
+    queryFn: () => listChannels({ page: 1, page_size: 100 }),
+  })
+
   const query = useQuery({
-    queryKey: ['reviews', page, status, q],
+    queryKey: ['reviews', page, status, q, sourceChatId],
     queryFn: () =>
       listReviews({
         page,
         page_size: 20,
         status: status && status !== STATUS_ALL ? status : undefined,
         q: q || undefined,
+        source_chat_id:
+          sourceChatId && sourceChatId !== 'all' ? Number(sourceChatId) : undefined,
       }),
     refetchInterval: 30_000,
   })
@@ -107,6 +116,24 @@ export function ReviewsPage() {
           }}
           allowDeselect={false}
           w={180}
+        />
+        <Select
+          label="来源频道"
+          data={[
+            { value: 'all', label: '全部来源' },
+            ...(channels.data?.items ?? []).map((c) => ({
+              value: String(c.chat_id),
+              label: c.title || c.username || String(c.chat_id),
+            })),
+          ]}
+          value={sourceChatId}
+          onChange={(v) => {
+            setSourceChatId(v ?? 'all')
+            setPage(1)
+          }}
+          searchable
+          allowDeselect={false}
+          w={220}
         />
         <TextInput
           label="搜索文本"
@@ -178,7 +205,17 @@ export function ReviewsPage() {
                   </Badge>
                 </Table.Td>
                 <Table.Td>
-                  {row.source_chat_id}/{row.source_message_id}
+                  <Text
+                    size="sm"
+                    title={`ID ${row.source_chat_id}`}
+                    lineClamp={1}
+                  >
+                    {row.source_title || String(row.source_chat_id)}
+                    <Text span c="dimmed" size="xs">
+                      {' '}
+                      /{row.source_message_id}
+                    </Text>
+                  </Text>
                 </Table.Td>
                 <Table.Td maw={360}>
                   <Text lineClamp={1} size="sm">

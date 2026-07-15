@@ -74,7 +74,9 @@ export interface ReviewTask {
   status: string
   source_chat_id: number
   source_message_id: number
+  source_title?: string | null
   target_chat_id: number | null
+  target_chat_ids?: number[] | null
   original_text: string
   processed_text: string
   final_text: string

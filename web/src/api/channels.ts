@@ -9,6 +9,8 @@ export interface SourceChannel {
   enabled: boolean
   publish_mode: string
   target_channel_id: number | null
+  target_ids: number[]
+  access_status: string
   processing_profile: string
   created_at?: string | null
   updated_at?: string | null
@@ -24,8 +26,17 @@ export interface TargetChannel {
   permission_status: string
   permission_detail: Record<string, unknown> | null
   last_permission_check_at: string | null
+  access_status: string
+  source_ids: number[]
   created_at?: string | null
   updated_at?: string | null
+}
+
+export interface AccountChannel {
+  chat_id: number
+  username: string | null
+  title: string | null
+  accessible: boolean
 }
 
 export async function listChannels(params: {
@@ -71,6 +82,16 @@ export async function patchChannel(
   })
 }
 
+export async function setChannelTargets(id: number, target_ids: number[]): Promise<{
+  target_ids: number[]
+  target_chat_ids: number[]
+}> {
+  return apiRequest(`/api/v1/channels/${id}/targets`, {
+    method: 'PUT',
+    body: JSON.stringify({ target_ids }),
+  })
+}
+
 export async function deleteChannel(id: number): Promise<void> {
   await apiRequest(`/api/v1/channels/${id}`, { method: 'DELETE' })
 }
@@ -98,6 +119,15 @@ export async function patchTarget(
   })
 }
 
+export async function setTargetSources(id: number, source_ids: number[]): Promise<{
+  source_ids: number[]
+}> {
+  return apiRequest(`/api/v1/targets/${id}/sources`, {
+    method: 'PUT',
+    body: JSON.stringify({ source_ids }),
+  })
+}
+
 export async function checkTargetPermissions(id: number): Promise<Record<string, unknown>> {
   return apiRequest(`/api/v1/targets/${id}/check-permissions`, { method: 'POST' })
 }
@@ -109,5 +139,25 @@ export async function sendTargetTestMessage(
   return apiRequest(`/api/v1/targets/${id}/test-message`, {
     method: 'POST',
     body: JSON.stringify({ text }),
+  })
+}
+
+export async function refreshChannels(): Promise<Record<string, unknown>> {
+  return apiRequest('/api/v1/channels/refresh', { method: 'POST' })
+}
+
+export async function listAccountChannels(): Promise<{ items: AccountChannel[] }> {
+  return apiRequest('/api/v1/channels/account')
+}
+
+export async function addFromAccount(body: {
+  chat_ids: number[]
+  as_source?: boolean
+  as_target?: boolean
+  publish_mode?: string
+}): Promise<{ created_sources: number[]; created_targets: number[] }> {
+  return apiRequest('/api/v1/channels/account/add', {
+    method: 'POST',
+    body: JSON.stringify(body),
   })
 }

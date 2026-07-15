@@ -28,7 +28,9 @@ class ReviewOut(APIModel):
     status: str
     source_chat_id: int
     source_message_id: int
+    source_title: str | None = None
     target_chat_id: int | None
+    target_chat_ids: list[int] | None = None
     original_text: str
     processed_text: str
     final_text: str
@@ -42,6 +44,13 @@ class ReviewOut(APIModel):
     created_at: Any = None
     updated_at: Any = None
     published_at: Any = None
+
+
+def _enrich_review(ctx: AppContext, row: Any) -> dict[str, Any]:
+    data = ReviewOut.model_validate(row).model_dump(mode="json")
+    data["source_title"] = ctx.channel_service.display_name(int(row.source_chat_id))
+    data["target_chat_ids"] = getattr(row, "target_chat_ids", None)
+    return data
 
 
 class EditReviewRequest(APIModel):
@@ -112,7 +121,7 @@ async def list_reviews(
                 await session.execute(list_stmt.offset(params.offset).limit(params.page_size))
             ).scalars()
         )
-    items = [ReviewOut.model_validate(r).model_dump(mode="json") for r in rows]
+    items = [_enrich_review(ctx, r) for r in rows]
     return Envelope(data=build_page(items=items, total=total, params=params))
 
 
@@ -147,7 +156,7 @@ async def get_review(
         )
     return Envelope(
         data={
-            "task": ReviewOut.model_validate(task).model_dump(mode="json"),
+            "task": _enrich_review(ctx, task),
             "revisions": [
                 {
                     "revision_number": r.revision_number,

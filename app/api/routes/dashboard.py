@@ -146,6 +146,7 @@ async def dashboard_summary(
                     "status": t.status,
                     "source_chat_id": t.source_chat_id,
                     "source_message_id": t.source_message_id,
+                    "source_title": ctx.channel_service.display_name(int(t.source_chat_id)),
                     "updated_at": t.updated_at.isoformat() if t.updated_at else None,
                 }
                 for t in recent_reviews

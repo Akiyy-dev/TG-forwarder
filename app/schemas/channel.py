@@ -22,6 +22,9 @@ class SourceChannelConfig:
     enabled: bool = True
     publish_mode: PublishMode = PublishMode.REVIEW
     target_channel_id: int | None = None
+    target_chat_ids: list[int] | None = None
+    access_status: str = "unknown"
     processing_profile: str = "default"
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    id: int | None = None

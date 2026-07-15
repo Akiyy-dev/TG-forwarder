@@ -25,6 +25,7 @@ from app.schemas.message import (
     ProcessingContext,
 )
 from app.services.channel_service import ChannelService
+from app.services.history_service import HistoryService
 from app.services.media_service import MediaService
 from app.services.retry_service import exception_summary
 
@@ -53,6 +54,7 @@ class MessageService:
         self.publisher = publisher
         self.media_service = media_service
         self.review_service = review_service or ReviewService(session_factory)
+        self.history = HistoryService()
         self.queue: asyncio.Queue[QueueItem | None] = asyncio.Queue(maxsize=settings.queue_maxsize)
         self._channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._global_sem = asyncio.Semaphore(settings.max_concurrency)
@@ -131,8 +133,11 @@ class MessageService:
         raw_messages: list[Any] | None = None,
     ) -> bool:
         """Fast path from listener: register + enqueue. Returns False if duplicate."""
+        targets = self.channel_service.get_targets_for(message.source_chat_id)
+        if not message.target_chat_ids:
+            message.target_chat_ids = list(targets)
         if message.target_chat_id is None:
-            message.target_chat_id = self.channel_service.get_target_for(message.source_chat_id)
+            message.target_chat_id = targets[0] if targets else self.settings.target_channel_id
 
         # Idempotency: create rows for primary and album parts
         ids_to_register = message.album_message_ids or [message.source_message_id]
@@ -220,9 +225,12 @@ class MessageService:
 
     async def process_one(self, item: QueueItem) -> None:
         message = item.message
-        target = message.target_chat_id or self.channel_service.get_target_for(
+        targets = message.target_chat_ids or self.channel_service.get_targets_for(
             message.source_chat_id
         )
+        message.target_chat_ids = list(targets)
+        target = message.target_chat_id or (targets[0] if targets else self.settings.target_channel_id)
+        message.target_chat_id = target
 
         async with self.session_factory() as session:
             repo = MessageRepository(session)
@@ -292,6 +300,16 @@ class MessageService:
                 )
                 await session.commit()
                 self.media_service.cleanup_message_files(message)
+                self.history.write(
+                    source_chat_id=message.source_chat_id,
+                    source_message_id=message.source_message_id,
+                    payload={
+                        "status": MessageStatus.FILTERED.value,
+                        "text": original_text,
+                        "reason": result.reason,
+                        "media_type": message.media_type.value,
+                    },
+                )
                 return
 
             if result.action == ProcessAction.FAIL:
@@ -335,6 +353,19 @@ class MessageService:
                     decision_reason=decision_reason,
                     matched_rules=list(detail.get("matched_rules") or []),
                     detected_keywords=list(detail.get("detected_keywords") or []),
+                )
+                self.history.write(
+                    source_chat_id=message.source_chat_id,
+                    source_message_id=message.source_message_id,
+                    payload={
+                        "status": MessageStatus.PENDING_REVIEW.value,
+                        "text": processed_msg.text,
+                        "original_text": original_text,
+                        "reason": decision_reason,
+                        "matched_rules": detail.get("matched_rules"),
+                        "media_type": processed_msg.media_type.value,
+                        "target_chat_ids": processed_msg.target_chat_ids,
+                    },
                 )
                 return
 
@@ -396,7 +427,18 @@ class MessageService:
             await session.commit()
 
         try:
-            ids = await self.publisher.publish(message, target)
+            targets = list(message.target_chat_ids) or [target]
+            ids: list[int] = []
+            last_exc: BaseException | None = None
+            success = 0
+            for t in targets:
+                try:
+                    ids.extend(await self.publisher.publish(message, int(t)))
+                    success += 1
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+            if success == 0 and last_exc is not None:
+                raise last_exc
         except Exception as exc:
             await self._mark_failed(message, exc, record_id, increment_retry=True)
             return
@@ -412,6 +454,17 @@ class MessageService:
                 )
             await session.commit()
         self.media_service.cleanup_message_files(message)
+        self.history.write(
+            source_chat_id=message.source_chat_id,
+            source_message_id=message.source_message_id,
+            payload={
+                "status": MessageStatus.PUBLISHED.value,
+                "text": message.text,
+                "media_type": message.media_type.value,
+                "target_chat_ids": message.target_chat_ids or [target],
+                "target_message_ids": ids,
+            },
+        )
 
     async def _mark_failed(
         self,

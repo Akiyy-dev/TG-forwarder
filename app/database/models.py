@@ -38,6 +38,7 @@ class SourceChannel(Base):
         String(32), default="review", nullable=False, index=True
     )
     target_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    access_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     processing_profile: Mapped[str] = mapped_column(String(64), default="default", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -58,6 +59,7 @@ class TargetChannel(Base):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    access_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     default_footer: Mapped[str | None] = mapped_column(Text, nullable=True)
     permission_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
     permission_detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -72,6 +74,22 @@ class TargetChannel(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class SourceTargetLink(Base):
+    __tablename__ = "source_target_links"
+    __table_args__ = (UniqueConstraint("source_id", "target_id", name="uq_source_target_link"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("source_channels.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("target_channels.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -200,6 +218,7 @@ class ReviewTask(Base):
     source_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     source_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     target_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    target_chat_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     original_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     processed_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     final_text: Mapped[str] = mapped_column(Text, nullable=False, default="")

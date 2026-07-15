@@ -66,12 +66,17 @@ class ReviewService:
 
             media_snapshot = self.media_snapshot_from_message(processed_message)
             processed_text = processed_message.text or ""
+            target_ids = list(getattr(processed_message, "target_chat_ids", None) or [])
+            if not target_ids and processed.target_chat_id is not None:
+                target_ids = [int(processed.target_chat_id)]
+            primary_target = processed.target_chat_id or (target_ids[0] if target_ids else None)
             task = ReviewTask(
                 processed_message_id=processed.id,
                 status=ReviewStatus.PENDING.value,
                 source_chat_id=processed.source_chat_id,
                 source_message_id=processed.source_message_id,
-                target_chat_id=processed.target_chat_id,
+                target_chat_id=primary_target,
+                target_chat_ids=target_ids or None,
                 original_text=original_text or "",
                 processed_text=processed_text,
                 final_text=processed_text,

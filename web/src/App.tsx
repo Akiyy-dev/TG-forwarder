@@ -10,6 +10,7 @@ import { NotFoundPage } from './pages/NotFoundPage'
 import { ReviewDetailPage } from './pages/ReviewDetailPage'
 import { ReviewsPage } from './pages/ReviewsPage'
 import { RulesPage } from './pages/RulesPage'
+import { SettingsPage } from './pages/SettingsPage'
 import { SystemPage } from './pages/SystemPage'
 
 export default function App() {
@@ -30,6 +31,8 @@ export default function App() {
           <Route path="/reviews/:id" element={<ReviewDetailPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/channels" element={<ChannelsPage />} />
+          <Route path="/settings" element={<Navigate to="/settings/basic" replace />} />
+          <Route path="/settings/:section" element={<SettingsPage />} />
           <Route path="/system" element={<SystemPage />} />
           <Route path="/logs" element={<LogsPage />} />
         </Route>

@@ -23,6 +23,7 @@ class ChannelRepository:
         target_channel_id: int | None = None,
         processing_profile: str = "default",
         publish_mode: str | PublishMode | None = None,
+        access_status: str | None = None,
     ) -> SourceChannel:
         result = await self._session.execute(
             select(SourceChannel).where(SourceChannel.chat_id == chat_id)
@@ -41,6 +42,7 @@ class ChannelRepository:
                 ),
                 target_channel_id=target_channel_id,
                 processing_profile=processing_profile,
+                access_status=access_status or "unknown",
             )
             self._session.add(channel)
         else:
@@ -52,6 +54,8 @@ class ChannelRepository:
             channel.processing_profile = processing_profile
             if publish_mode is not None:
                 channel.publish_mode = PublishMode(publish_mode).value
+            if access_status is not None:
+                channel.access_status = access_status
         await self._session.flush()
         return channel
 
@@ -111,6 +115,7 @@ class ChannelRepository:
         title: str | None = None,
         enabled: bool = True,
         default_footer: str | None = None,
+        access_status: str | None = None,
     ) -> TargetChannel:
         target = await self.get_target_by_chat_id(chat_id)
         if target is None:
@@ -121,6 +126,7 @@ class ChannelRepository:
                 enabled=enabled,
                 default_footer=default_footer,
                 permission_status="unknown",
+                access_status=access_status or "unknown",
             )
             self._session.add(target)
         else:
@@ -131,5 +137,7 @@ class ChannelRepository:
             target.enabled = enabled
             if default_footer is not None:
                 target.default_footer = default_footer
+            if access_status is not None:
+                target.access_status = access_status
         await self._session.flush()
         return target

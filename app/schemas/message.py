@@ -96,6 +96,7 @@ class NormalizedMessage:
     forward_info: ForwardInfo | None = None
     raw_metadata: dict[str, Any] = field(default_factory=dict)
     target_chat_id: int | None = None
+    target_chat_ids: list[int] = field(default_factory=list)
     album_message_ids: list[int] = field(default_factory=list)
 
     @property

@@ -1,8 +1,10 @@
 import {
   Badge,
   Button,
+  Checkbox,
   Group,
   Modal,
+  MultiSelect,
   Select,
   Stack,
   Switch,
@@ -11,19 +13,26 @@ import {
   Text,
   TextInput,
   Title,
+  Tooltip,
 } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
+  addFromAccount,
   checkTargetPermissions,
   createChannel,
   createTarget,
   deleteChannel,
+  listAccountChannels,
   listChannels,
   listTargets,
   patchChannel,
+  patchTarget,
+  refreshChannels,
   sendTargetTestMessage,
+  setChannelTargets,
+  setTargetSources,
 } from '../api/channels'
 import { useMe } from '../hooks/useAuth'
 import {
@@ -32,16 +41,26 @@ import {
   publishModeLabel,
 } from '../utils/labels'
 
+function accessLabel(status: string) {
+  if (status === 'ok') return '可达'
+  if (status === 'missing') return '不可达'
+  return '未知'
+}
+
 export function ChannelsPage() {
   const { data: user } = useMe()
   const isAdmin = user?.role === 'super_admin'
   const qc = useQueryClient()
   const [sourceOpen, setSourceOpen] = useState(false)
   const [targetOpen, setTargetOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
   const [chatId, setChatId] = useState('')
   const [title, setTitle] = useState('')
   const [mode, setMode] = useState('review')
   const [msg, setMsg] = useState<string | null>(null)
+  const [picked, setPicked] = useState<string[]>([])
+  const [asSource, setAsSource] = useState(true)
+  const [asTarget, setAsTarget] = useState(false)
 
   const sources = useQuery({
     queryKey: ['channels'],
@@ -51,6 +70,28 @@ export function ChannelsPage() {
     queryKey: ['targets'],
     queryFn: () => listTargets(),
   })
+  const account = useQuery({
+    queryKey: ['account-channels'],
+    queryFn: () => listAccountChannels(),
+    enabled: accountOpen,
+  })
+
+  const targetOptions = useMemo(
+    () =>
+      (targets.data?.items ?? []).map((t) => ({
+        value: String(t.id),
+        label: t.title || t.username || String(t.chat_id),
+      })),
+    [targets.data],
+  )
+  const sourceOptions = useMemo(
+    () =>
+      (sources.data?.items ?? []).map((s) => ({
+        value: String(s.id),
+        label: s.title || s.username || String(s.chat_id),
+      })),
+    [sources.data],
+  )
 
   const createSourceMut = useMutation({
     mutationFn: () =>
@@ -83,18 +124,58 @@ export function ChannelsPage() {
     onError: (err) => setMsg(err instanceof ApiError ? err.message : '创建失败'),
   })
 
+  const refreshMut = useMutation({
+    mutationFn: () => refreshChannels(),
+    onSuccess: async (res) => {
+      setMsg(`刷新完成：YAML ${String(res.yaml_upserted)}，访问状态更新 ${String(res.access_updated)}`)
+      await qc.invalidateQueries({ queryKey: ['channels'] })
+      await qc.invalidateQueries({ queryKey: ['targets'] })
+    },
+    onError: (err) => setMsg(err instanceof ApiError ? err.message : '刷新失败'),
+  })
+
+  const addAccountMut = useMutation({
+    mutationFn: () =>
+      addFromAccount({
+        chat_ids: picked.map(Number),
+        as_source: asSource,
+        as_target: asTarget,
+        publish_mode: mode,
+      }),
+    onSuccess: async (res) => {
+      setAccountOpen(false)
+      setPicked([])
+      setMsg(
+        `已添加：来源 ${res.created_sources.length}，目标 ${res.created_targets.length}`,
+      )
+      await qc.invalidateQueries({ queryKey: ['channels'] })
+      await qc.invalidateQueries({ queryKey: ['targets'] })
+    },
+    onError: (err) => setMsg(err instanceof ApiError ? err.message : '添加失败'),
+  })
+
   return (
-    <Stack gap="md">
+    <Stack gap="md" className="page-enter">
       <Group justify="space-between">
         <div>
           <Title order={2}>频道管理</Title>
           <Text c="dimmed" size="sm">
-            来源发布模式与目标频道权限（配置文件种子见 config/channels.yaml）
+            多对多绑定、账户可达检测与 YAML 刷新
           </Text>
         </div>
+        {isAdmin && (
+          <Group>
+            <Button variant="light" loading={refreshMut.isPending} onClick={() => refreshMut.mutate()}>
+              刷新
+            </Button>
+            <Button variant="default" onClick={() => setAccountOpen(true)}>
+              从账户添加
+            </Button>
+          </Group>
+        )}
       </Group>
       {msg && (
-        <Text c="red" size="sm">
+        <Text c="dimmed" size="sm">
           {msg}
         </Text>
       )}
@@ -117,6 +198,7 @@ export function ChannelsPage() {
                 <Table.Tr>
                   <Table.Th>标题</Table.Th>
                   <Table.Th>聊天 ID</Table.Th>
+                  <Table.Th>可达</Table.Th>
                   <Table.Th>发布模式</Table.Th>
                   <Table.Th>目标</Table.Th>
                   <Table.Th>启用</Table.Th>
@@ -128,6 +210,11 @@ export function ChannelsPage() {
                   <Table.Tr key={ch.id}>
                     <Table.Td>{ch.title || ch.username || '-'}</Table.Td>
                     <Table.Td>{ch.chat_id}</Table.Td>
+                    <Table.Td>
+                      <Badge color={ch.access_status === 'ok' ? 'teal' : 'orange'} variant="light">
+                        {accessLabel(ch.access_status)}
+                      </Badge>
+                    </Table.Td>
                     <Table.Td>
                       {isAdmin ? (
                         <Select
@@ -145,17 +232,54 @@ export function ChannelsPage() {
                         <Badge variant="light">{publishModeLabel(ch.publish_mode)}</Badge>
                       )}
                     </Table.Td>
-                    <Table.Td>{ch.target_channel_id ?? '-'}</Table.Td>
+                    <Table.Td style={{ minWidth: 220 }}>
+                      {isAdmin ? (
+                        <MultiSelect
+                          data={targetOptions}
+                          value={(ch.target_ids ?? []).map(String)}
+                          placeholder="绑定目标"
+                          searchable
+                          onChange={(vals) => {
+                            void setChannelTargets(
+                              ch.id,
+                              vals.map(Number),
+                            )
+                              .then(() => {
+                                void qc.invalidateQueries({ queryKey: ['channels'] })
+                                void qc.invalidateQueries({ queryKey: ['targets'] })
+                              })
+                              .catch((err: unknown) =>
+                                setMsg(err instanceof ApiError ? err.message : '绑定失败'),
+                              )
+                          }}
+                        />
+                      ) : (
+                        <Text size="sm">{(ch.target_ids ?? []).join(', ') || '-'}</Text>
+                      )}
+                    </Table.Td>
                     <Table.Td>
                       {isAdmin ? (
-                        <Switch
-                          checked={ch.enabled}
-                          onChange={(e) =>
-                            void patchChannel(ch.id, { enabled: e.currentTarget.checked }).then(
-                              () => qc.invalidateQueries({ queryKey: ['channels'] }),
-                            )
+                        <Tooltip
+                          label={
+                            ch.access_status !== 'ok'
+                              ? '不可达频道无法启用'
+                              : '切换启用'
                           }
-                        />
+                        >
+                          <Switch
+                            checked={ch.enabled}
+                            disabled={ch.access_status !== 'ok' && !ch.enabled}
+                            onChange={(e) =>
+                              void patchChannel(ch.id, {
+                                enabled: e.currentTarget.checked,
+                              })
+                                .then(() => qc.invalidateQueries({ queryKey: ['channels'] }))
+                                .catch((err: unknown) =>
+                                  setMsg(err instanceof ApiError ? err.message : '更新失败'),
+                                )
+                            }
+                          />
+                        </Tooltip>
                       ) : (
                         <Badge color={ch.enabled ? 'teal' : 'gray'}>
                           {ch.enabled ? '启用' : '停用'}
@@ -199,6 +323,8 @@ export function ChannelsPage() {
                 <Table.Tr>
                   <Table.Th>标题</Table.Th>
                   <Table.Th>聊天 ID</Table.Th>
+                  <Table.Th>可达</Table.Th>
+                  <Table.Th>来源绑定</Table.Th>
                   <Table.Th>权限</Table.Th>
                   <Table.Th>启用</Table.Th>
                   {isAdmin && <Table.Th>操作</Table.Th>}
@@ -209,6 +335,33 @@ export function ChannelsPage() {
                   <Table.Tr key={t.id}>
                     <Table.Td>{t.title || t.username || '-'}</Table.Td>
                     <Table.Td>{t.chat_id}</Table.Td>
+                    <Table.Td>
+                      <Badge color={t.access_status === 'ok' ? 'teal' : 'orange'} variant="light">
+                        {accessLabel(t.access_status)}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td style={{ minWidth: 220 }}>
+                      {isAdmin ? (
+                        <MultiSelect
+                          data={sourceOptions}
+                          value={(t.source_ids ?? []).map(String)}
+                          placeholder="绑定来源"
+                          searchable
+                          onChange={(vals) => {
+                            void setTargetSources(t.id, vals.map(Number))
+                              .then(() => {
+                                void qc.invalidateQueries({ queryKey: ['channels'] })
+                                void qc.invalidateQueries({ queryKey: ['targets'] })
+                              })
+                              .catch((err: unknown) =>
+                                setMsg(err instanceof ApiError ? err.message : '绑定失败'),
+                              )
+                          }}
+                        />
+                      ) : (
+                        <Text size="sm">{(t.source_ids ?? []).join(', ') || '-'}</Text>
+                      )}
+                    </Table.Td>
                     <Table.Td>
                       <Badge
                         color={
@@ -222,7 +375,23 @@ export function ChannelsPage() {
                         {permissionStatusLabel(t.permission_status)}
                       </Badge>
                     </Table.Td>
-                    <Table.Td>{t.enabled ? '是' : '否'}</Table.Td>
+                    <Table.Td>
+                      {isAdmin ? (
+                        <Switch
+                          checked={t.enabled}
+                          disabled={t.access_status !== 'ok' && !t.enabled}
+                          onChange={(e) =>
+                            void patchTarget(t.id, { enabled: e.currentTarget.checked })
+                              .then(() => qc.invalidateQueries({ queryKey: ['targets'] }))
+                              .catch((err: unknown) =>
+                                setMsg(err instanceof ApiError ? err.message : '更新失败'),
+                              )
+                          }
+                        />
+                      ) : (
+                        t.enabled ? '是' : '否'
+                      )}
+                    </Table.Td>
                     {isAdmin && (
                       <Table.Td>
                         <Group gap={6}>
@@ -293,6 +462,53 @@ export function ChannelsPage() {
           <TextInput label="标题" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
           <Button loading={createTargetMut.isPending} onClick={() => createTargetMut.mutate()}>
             创建
+          </Button>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        title="从账户添加频道"
+        size="lg"
+      >
+        <Stack>
+          <Group>
+            <Checkbox
+              label="添加为来源"
+              checked={asSource}
+              onChange={(e) => setAsSource(e.currentTarget.checked)}
+            />
+            <Checkbox
+              label="添加为目标"
+              checked={asTarget}
+              onChange={(e) => setAsTarget(e.currentTarget.checked)}
+            />
+            <Select
+              label="发布模式"
+              data={PUBLISH_MODE_OPTIONS}
+              value={mode}
+              w={160}
+              onChange={(v) => setMode(v ?? 'review')}
+            />
+          </Group>
+          <MultiSelect
+            label="账户频道"
+            data={(account.data?.items ?? []).map((c) => ({
+              value: String(c.chat_id),
+              label: `${c.title || c.username || c.chat_id}${c.accessible ? '' : ' (不可读)'}`,
+            }))}
+            value={picked}
+            onChange={setPicked}
+            searchable
+            nothingFoundMessage={account.isLoading ? '加载中…' : '无可用频道'}
+          />
+          <Button
+            disabled={!picked.length || (!asSource && !asTarget)}
+            loading={addAccountMut.isPending}
+            onClick={() => addAccountMut.mutate()}
+          >
+            一键添加
           </Button>
         </Stack>
       </Modal>

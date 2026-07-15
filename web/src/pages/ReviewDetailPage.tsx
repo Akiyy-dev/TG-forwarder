@@ -13,7 +13,7 @@ import {
   Title,
 } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import {
@@ -26,6 +26,7 @@ import {
   rejectReview,
   restoreReview,
 } from '../api/reviews'
+import { getSettings } from '../api/settings'
 import { useMe } from '../hooks/useAuth'
 import {
   canApproveTask,
@@ -51,6 +52,17 @@ export function ReviewDetailPage() {
   const [reason, setReason] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [approving, setApproving] = useState(false)
+  const [autoPublishOpen, setAutoPublishOpen] = useState(false)
+  const [countdown, setCountdown] = useState(10)
+  const countdownRef = useRef<number | null>(null)
+  const autoSeconds = useQuery({
+    queryKey: ['settings', 'auto-publish'],
+    queryFn: async () => {
+      const s = await getSettings()
+      const v = s.values.review_auto_publish_seconds
+      return typeof v === 'number' ? v : 10
+    },
+  })
 
   const detail = useQuery({
     queryKey: ['review', taskId],
@@ -78,6 +90,39 @@ export function ReviewDetailPage() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
+
+  useEffect(() => {
+    if (!autoPublishOpen) {
+      if (countdownRef.current != null) {
+        window.clearInterval(countdownRef.current)
+        countdownRef.current = null
+      }
+      return
+    }
+    countdownRef.current = window.setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          if (countdownRef.current != null) {
+            window.clearInterval(countdownRef.current)
+            countdownRef.current = null
+          }
+          void (async () => {
+            setAutoPublishOpen(false)
+            if (!task) return
+            await wrap(() => publishReview(taskId, task.revision))
+          })()
+          return 0
+        }
+        return c - 1
+      })
+    }, 1000)
+    return () => {
+      if (countdownRef.current != null) {
+        window.clearInterval(countdownRef.current)
+        countdownRef.current = null
+      }
+    }
+  }, [autoPublishOpen])
 
   const invalidate = async () => {
     await qc.invalidateQueries({ queryKey: ['review', taskId] })
@@ -138,9 +183,13 @@ export function ReviewDetailPage() {
             </Badge>
             <Badge variant="outline">版本 {task.revision}</Badge>
           </Group>
-          <Text c="dimmed" size="sm">
-            来源 {task.source_chat_id}/{task.source_message_id}
-            {task.target_chat_id ? ` → ${task.target_chat_id}` : ''}
+          <Text c="dimmed" size="sm" title={`来源 ID ${task.source_chat_id}`}>
+            来源 {task.source_title || task.source_chat_id}/{task.source_message_id}
+            {task.target_chat_ids?.length
+              ? ` → ${task.target_chat_ids.join(', ')}`
+              : task.target_chat_id
+                ? ` → ${task.target_chat_id}`
+                : ''}
           </Text>
         </div>
         <Button component={Link} to="/reviews" variant="default">
@@ -274,6 +323,9 @@ export function ReviewDetailPage() {
                         await wrap(() =>
                           approveReview(taskId, task.revision, reason || undefined),
                         )
+                        const secs = autoSeconds.data ?? 10
+                        setCountdown(secs)
+                        setAutoPublishOpen(true)
                       } finally {
                         setApproving(false)
                       }
@@ -417,6 +469,33 @@ export function ReviewDetailPage() {
               }}
             >
               确认
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={autoPublishOpen}
+        onClose={() => setAutoPublishOpen(false)}
+        title="自动发布"
+        className="modal-enter"
+      >
+        <Stack>
+          <Text>
+            {countdown} 秒后自动发布到已绑定目标频道。取消仅停止倒计时，任务保持已批准。
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setAutoPublishOpen(false)}>
+              取消
+            </Button>
+            <Button
+              color="teal"
+              onClick={() => {
+                setAutoPublishOpen(false)
+                void wrap(() => publishReview(taskId, task.revision, reason || undefined))
+              }}
+            >
+              立即发布
             </Button>
           </Group>
         </Stack>

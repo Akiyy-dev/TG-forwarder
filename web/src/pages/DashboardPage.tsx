@@ -106,8 +106,11 @@ export function DashboardPage() {
                     {reviewStatusLabel(row.status)}
                   </Badge>
                 </Table.Td>
-                <Table.Td>
-                  {row.source_chat_id}/{row.source_message_id}
+                <Table.Td title={`ID ${row.source_chat_id}`}>
+                  {String(
+                    (row as { source_title?: string }).source_title || row.source_chat_id,
+                  )}
+                  /{row.source_message_id}
                 </Table.Td>
                 <Table.Td>{row.updated_at ?? '-'}</Table.Td>
               </Table.Tr>
