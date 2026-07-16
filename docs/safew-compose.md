@@ -89,6 +89,37 @@ docker compose up -d
 docker compose ps
 ```
 
+## 使用 Release 镜像
+
+创建 GitHub Release 后，工作流会将主应用镜像发布到：
+
+```text
+ghcr.io/akiyy-dev/tg-forwarder:<版本>
+```
+
+SafeW 客户端安装包没有提交到仓库，因此 SafeW 镜像默认不发布。仓库管理员需要配置：
+
+- Repository variable：`BUILD_SAFEW_IMAGE=true`；
+- Actions secret：`SAFEW_PACKAGE_URL`，可下载安装包的 HTTPS 地址；
+- Actions secret：`SAFEW_PACKAGE_SHA256`，安装包的 SHA-256 校验值。
+
+配置完成后，Release 工作流还会发布：
+
+```text
+ghcr.io/akiyy-dev/tg-forwarder-safew:<版本>
+```
+
+每次发布会生成 Release tag、纯版本号、主次版本号和 `latest` 标签。建议在 `.env` 中固定
+Release tag，例如 `IMAGE_TAG=v1.2.3`，然后直接拉取并启动：
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
+
+若 GHCR 包为私有，请先使用有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
+发布 SafeW 镜像前，请自行确认 SafeW 客户端的再分发许可。
+
 ## 登录 SafeW
 
 从自己的电脑建立 SSH 隧道：

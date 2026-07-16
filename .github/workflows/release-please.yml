@@ -5,16 +5,124 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
-
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  build-app-image:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=raw,value=latest
+
+      - name: Build and push application image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/app.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+  # The SafeW package is intentionally not committed. To publish this image, set
+  # repository variable BUILD_SAFEW_IMAGE=true and configure both secrets below.
+  build-safew-image:
+    needs: release-please
+    if: >-
+      ${{ needs.release-please.outputs.release_created == 'true' &&
+          vars.BUILD_SAFEW_IMAGE == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Download and verify SafeW package
+        env:
+          SAFEW_PACKAGE_URL: ${{ secrets.SAFEW_PACKAGE_URL }}
+          SAFEW_PACKAGE_SHA256: ${{ secrets.SAFEW_PACKAGE_SHA256 }}
+        run: |
+          test -n "$SAFEW_PACKAGE_URL"
+          test -n "$SAFEW_PACKAGE_SHA256"
+          mkdir -p image
+          curl --fail --location --retry 3 \
+            --output image/tsetup.3.6.2.tar.xz \
+            "$SAFEW_PACKAGE_URL"
+          echo "$SAFEW_PACKAGE_SHA256  image/tsetup.3.6.2.tar.xz" | sha256sum --check --strict
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}-safew
+          tags: |
+            type=raw,value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=raw,value=latest
+
+      - name: Build and push SafeW image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/safew.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=safew
+          cache-to: type=gha,mode=max,scope=safew

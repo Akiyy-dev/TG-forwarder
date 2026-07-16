@@ -52,6 +52,9 @@ ssh -L 6080:127.0.0.1:6080 your-user@your-server
 完整部署、来源筛选、单容器更新和排障说明见
 [SafeW + Telegram Compose 部署指南](docs/safew-compose.md)。
 
+正式 Release 会将应用镜像发布到 GHCR；SafeW 镜像需要先配置受保护的安装包下载地址和
+SHA-256 校验值。镜像名称、标签和拉取方式也在上述部署指南中说明。
+
 ## 快速开始：仅 Telegram
 
 需要 Python 3.11+，推荐 Python 3.12。
