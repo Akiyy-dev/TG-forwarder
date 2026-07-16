@@ -12,7 +12,7 @@ RUN apt-get update \
         libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 \
         libxcb-xkb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 \
         libxfixes3 libxi6 libxkbcommon-x11-0 libxrandr2 libxrender1 libxtst6 \
-        novnc openbox procps supervisor tini websockify x11-utils x11vnc xvfb \
+        novnc openbox procps supervisor tini websockify x11-utils x11vnc xvfb xz-utils \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml README.md ./
