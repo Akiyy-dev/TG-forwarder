@@ -64,9 +64,7 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "production"
-    app_role: Literal[
-        "all", "web", "sender", "telegram-receiver", "safew-receiver"
-    ] = "all"
+    app_role: Literal["all", "web", "sender", "telegram-receiver", "safew-receiver"] = "all"
     log_level: str = "INFO"
 
     telegram_api_id: int = 0
@@ -96,9 +94,7 @@ class Settings(BaseSettings):
     temp_file_ttl_minutes: int = 60
 
     # SafeW desktop notification receiver
-    safew_app_names: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["SafeW"]
-    )
+    safew_app_names: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["SafeW"])
     safew_allowed_chats: Annotated[list[str], NoDecode] = Field(default_factory=list)
     safew_capture_all_apps: bool = False
     safew_auto_register_sources: bool = True
@@ -218,11 +214,7 @@ class Settings(BaseSettings):
         if self.album_wait_seconds <= 0 or self.album_max_wait_seconds < self.album_wait_seconds:
             msg = "ALBUM wait times are invalid"
             raise ValueError(msg)
-        if (
-            self.app_role in {"all", "web"}
-            and self.web_enabled
-            and not self.web_secret_key.strip()
-        ):
+        if self.app_role in {"all", "web"} and self.web_enabled and not self.web_secret_key.strip():
             msg = "WEB_SECRET_KEY is required when WEB_ENABLED=true"
             raise ValueError(msg)
         return self
