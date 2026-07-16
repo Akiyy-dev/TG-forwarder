@@ -37,8 +37,12 @@ class SPAStaticFiles(StaticFiles):
         except StarletteHTTPException as exc:
             if exc.status_code != 404:
                 raise
+            normalized = path.replace("\\", "/")
             # Missing hashed assets / real files should stay 404.
-            if path.startswith("assets/") or Path(path).suffix:
+            if normalized.startswith("assets/") or Path(normalized).suffix:
+                raise
+            # Never SPA-fallback API paths (e.g. disabled /api/docs).
+            if normalized == "api" or normalized.startswith("api/"):
                 raise
             return await super().get_response("index.html", scope)
 

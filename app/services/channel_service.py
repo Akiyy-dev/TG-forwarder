@@ -270,7 +270,8 @@ class ChannelService:
             username=data.get("username"),
         )
         want_enabled = bool(data.get("enabled", True))
-        if want_enabled and access["status"] != "ok":
+        # Only force-disable when Telethon confirmed the channel is unreachable.
+        if want_enabled and access["status"] == "missing":
             want_enabled = False
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
@@ -320,7 +321,7 @@ class ChannelService:
                 channel.title = data["title"]
             if "enabled" in data:
                 want = bool(data["enabled"])
-                if want and (channel.access_status or "unknown") != "ok":
+                if want and (channel.access_status or "unknown") == "missing":
                     # Re-verify if client available
                     access = await self._resolve_access(
                         client,
@@ -328,7 +329,7 @@ class ChannelService:
                         username=channel.username,
                     )
                     channel.access_status = access["status"]
-                    if access["status"] != "ok":
+                    if access["status"] == "missing":
                         raise ChannelServiceError(
                             "channel is not accessible; cannot enable",
                             code="not_accessible",
@@ -365,7 +366,7 @@ class ChannelService:
             username=data.get("username"),
         )
         want_enabled = bool(data.get("enabled", True))
-        if want_enabled and access["status"] != "ok":
+        if want_enabled and access["status"] == "missing":
             want_enabled = False
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
@@ -400,14 +401,14 @@ class ChannelService:
                 target.title = data["title"]
             if "enabled" in data:
                 want = bool(data["enabled"])
-                if want and (target.access_status or "unknown") != "ok":
+                if want and (target.access_status or "unknown") == "missing":
                     access = await self._resolve_access(
                         client,
                         chat_id=target.chat_id,
                         username=target.username,
                     )
                     target.access_status = access["status"]
-                    if access["status"] != "ok":
+                    if access["status"] == "missing":
                         raise ChannelServiceError(
                             "channel is not accessible; cannot enable",
                             code="not_accessible",
