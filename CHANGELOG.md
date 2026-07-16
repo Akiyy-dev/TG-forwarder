@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.1...v0.3.2) (2026-07-16)
+
+
+### Bug Fixes
+
+* distinguish SafeW sources in web ([f9ed1de](https://github.com/Akiyy-dev/TG-forwarder/commit/f9ed1deea81c80ee729187881a52d1292cdb96ec))
+
 ## [0.3.1](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.0...v0.3.1) (2026-07-16)
 
 
