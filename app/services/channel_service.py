@@ -107,14 +107,14 @@ class ChannelService:
             updated_at=ch.updated_at,
         )
 
-    async def _load_target_map(
-        self, session: AsyncSession
-    ) -> dict[int, list[int]]:
+    async def _load_target_map(self, session: AsyncSession) -> dict[int, list[int]]:
         """source_id -> list of target telegram chat_ids."""
         links = (
-            await session.execute(select(SourceTargetLink, TargetChannel.chat_id).join(
-                TargetChannel, SourceTargetLink.target_id == TargetChannel.id
-            ))
+            await session.execute(
+                select(SourceTargetLink, TargetChannel.chat_id).join(
+                    TargetChannel, SourceTargetLink.target_id == TargetChannel.id
+                )
+            )
         ).all()
         mapping: dict[int, list[int]] = {}
         for link, chat_id in links:
@@ -474,9 +474,7 @@ class ChannelService:
             "error": result.get("error"),
         }
 
-    async def _resolve_target_db_ids(
-        self, session: AsyncSession, ids: list[int]
-    ) -> list[int]:
+    async def _resolve_target_db_ids(self, session: AsyncSession, ids: list[int]) -> list[int]:
         """Accept target DB ids or telegram chat_ids; return target DB ids."""
         repo = ChannelRepository(session)
         out: list[int] = []
@@ -491,9 +489,7 @@ class ChannelService:
                 out.append(by_chat.id)
         return out
 
-    async def _resolve_target_chat_ids(
-        self, session: AsyncSession, ids: list[int]
-    ) -> list[int]:
+    async def _resolve_target_chat_ids(self, session: AsyncSession, ids: list[int]) -> list[int]:
         repo = ChannelRepository(session)
         out: list[int] = []
         for raw in ids:
@@ -513,10 +509,14 @@ class ChannelService:
         """Replace links for source; refs are DB/chat ids. Returns telegram chat_ids."""
         target_db_ids = await self._resolve_target_db_ids(session, target_refs)
         existing = (
-            await session.execute(
-                select(SourceTargetLink).where(SourceTargetLink.source_id == source_id)
+            (
+                await session.execute(
+                    select(SourceTargetLink).where(SourceTargetLink.source_id == source_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for link in existing:
             await session.delete(link)
         await session.flush()
@@ -562,10 +562,14 @@ class ChannelService:
                 if by_chat is not None:
                     wanted.add(by_chat.id)
             existing = (
-                await session.execute(
-                    select(SourceTargetLink).where(SourceTargetLink.target_id == target_id)
+                (
+                    await session.execute(
+                        select(SourceTargetLink).where(SourceTargetLink.target_id == target_id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             existing_source_ids = {link.source_id for link in existing}
             for link in existing:
                 if link.source_id not in wanted:
@@ -594,23 +598,31 @@ class ChannelService:
     async def get_linked_target_ids(self, source_id: int) -> list[int]:
         async with self.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(SourceTargetLink.target_id).where(
-                        SourceTargetLink.source_id == source_id
+                (
+                    await session.execute(
+                        select(SourceTargetLink.target_id).where(
+                            SourceTargetLink.source_id == source_id
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return [int(x) for x in rows]
 
     async def get_linked_source_ids(self, target_id: int) -> list[int]:
         async with self.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(SourceTargetLink.source_id).where(
-                        SourceTargetLink.target_id == target_id
+                (
+                    await session.execute(
+                        select(SourceTargetLink.source_id).where(
+                            SourceTargetLink.target_id == target_id
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return [int(x) for x in rows]
 
     async def list_account_channels(self, client: Any) -> list[dict[str, Any]]:

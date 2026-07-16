@@ -230,9 +230,7 @@ class MessageService:
         )
         message.target_chat_ids = list(targets)
         if message.target_chat_id is None:
-            message.target_chat_id = (
-                targets[0] if targets else self.settings.target_channel_id
-            )
+            message.target_chat_id = targets[0] if targets else self.settings.target_channel_id
         target = message.target_chat_id
 
         async with self.session_factory() as session:

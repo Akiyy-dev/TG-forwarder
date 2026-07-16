@@ -176,8 +176,7 @@ async def add_from_account(
     created_targets: list[int] = []
     try:
         account = {
-            int(i["chat_id"]): i
-            for i in await ctx.channel_service.list_account_channels(client)
+            int(i["chat_id"]): i for i in await ctx.channel_service.list_account_channels(client)
         }
         for cid in body.chat_ids:
             meta = account.get(int(cid), {"chat_id": int(cid), "accessible": False})
