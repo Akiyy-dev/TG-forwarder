@@ -410,6 +410,17 @@ class MessageService:
 
         await self._publish(result.message or message, target, record_id)
 
+    async def process_durable(self, message: NormalizedMessage) -> None:
+        """Process a stream event before its external acknowledgement.
+
+        Redis consumers use this path so a sender crash leaves the event pending
+        with its complete normalized payload and shared-volume media paths.
+        """
+        async with self._global_sem:
+            lock = self._channel_locks[message.source_chat_id]
+            async with lock:
+                await self.process_one(QueueItem(message=message))
+
     async def _publish(
         self,
         message: NormalizedMessage,

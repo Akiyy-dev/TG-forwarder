@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -64,25 +64,44 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "production"
+    app_role: Literal[
+        "all", "web", "sender", "telegram-receiver", "safew-receiver"
+    ] = "all"
     log_level: str = "INFO"
 
-    telegram_api_id: int
-    telegram_api_hash: str
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
     telegram_phone: str = ""
     telegram_session_path: str = "./data/sessions/listener"
 
-    bot_token: str
+    bot_token: str = ""
     bot_admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
-    target_channel_id: int
+    target_channel_id: int = 0
 
     source_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
     database_url: str = "sqlite+aiosqlite:///./data/database/app.db"
+    redis_url: str = "redis://redis:6379/0"
+    redis_incoming_stream: str = "forwarder:incoming"
+    redis_command_stream: str = "forwarder:commands"
+    redis_sender_group: str = "forwarder-sender"
+    redis_consumer_name: str = "sender-1"
+    redis_stream_maxlen: int = 0
+    redis_block_ms: int = 5000
+    redis_claim_idle_ms: int = 300000
     channels_config_path: str = "./config/channels.yaml"
     rules_config_path: str = "./config/rules.yaml"
 
     download_dir: str = "./data/downloads"
     max_download_size_mb: int = 100
     temp_file_ttl_minutes: int = 60
+
+    # SafeW desktop notification receiver
+    safew_app_names: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["SafeW"]
+    )
+    safew_allowed_chats: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    safew_capture_all_apps: bool = False
+    safew_auto_register_sources: bool = True
 
     album_wait_seconds: float = 2.5
     album_max_wait_seconds: float = 20.0
@@ -136,6 +155,8 @@ class Settings(BaseSettings):
         "blocked_link_domains",
         "allowed_link_domains",
         "web_allowed_origins",
+        "safew_app_names",
+        "safew_allowed_chats",
         mode="before",
     )
     @classmethod
@@ -160,23 +181,35 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_api_hash", "bot_token")
     @classmethod
-    def non_empty_secrets(cls, value: str) -> str:
-        if not value or not value.strip():
-            msg = "must not be empty"
-            raise ValueError(msg)
+    def strip_secrets(cls, value: str) -> str:
         return value.strip()
 
     @model_validator(mode="after")
     def validate_required(self) -> Settings:
         from app.config_files import load_channels_config
 
-        if not self.source_channels and not load_channels_config(self.channels_config_path):
+        if self.app_role in {"all", "telegram-receiver"} and (
+            self.telegram_api_id <= 0 or not self.telegram_api_hash
+        ):
+            msg = "TELEGRAM_API_ID and TELEGRAM_API_HASH are required for telegram-receiver"
+            raise ValueError(msg)
+        if (
+            self.app_role in {"all", "telegram-receiver"}
+            and not self.source_channels
+            and not load_channels_config(self.channels_config_path)
+        ):
             msg = (
                 "SOURCE_CHANNELS must contain at least one channel, "
                 "or provide non-empty channels in the channels config file"
             )
             raise ValueError(msg)
-        if not self.bot_admin_ids:
+        if self.app_role in {"all", "sender"} and not self.bot_token:
+            msg = "BOT_TOKEN is required for sender"
+            raise ValueError(msg)
+        if self.app_role in {"all", "sender"} and self.target_channel_id == 0:
+            msg = "TARGET_CHANNEL_ID is required for sender"
+            raise ValueError(msg)
+        if self.app_role in {"all", "sender"} and not self.bot_admin_ids:
             msg = "BOT_ADMIN_IDS must contain at least one Telegram user id"
             raise ValueError(msg)
         if self.max_download_size_mb <= 0:
@@ -185,7 +218,11 @@ class Settings(BaseSettings):
         if self.album_wait_seconds <= 0 or self.album_max_wait_seconds < self.album_wait_seconds:
             msg = "ALBUM wait times are invalid"
             raise ValueError(msg)
-        if self.web_enabled and not self.web_secret_key.strip():
+        if (
+            self.app_role in {"all", "web"}
+            and self.web_enabled
+            and not self.web_secret_key.strip()
+        ):
             msg = "WEB_SECRET_KEY is required when WEB_ENABLED=true"
             raise ValueError(msg)
         return self
@@ -199,7 +236,8 @@ class Settings(BaseSettings):
 
     def __repr__(self) -> str:
         return (
-            f"Settings(app_env={self.app_env!r}, log_level={self.log_level!r}, "
+            f"Settings(app_env={self.app_env!r}, app_role={self.app_role!r}, "
+            f"log_level={self.log_level!r}, "
             f"telegram_api_id=***, telegram_api_hash=***, telegram_phone=***, "
             f"bot_token=***, target_channel_id={self.target_channel_id}, "
             f"source_channels={self.source_channels!r}, web_enabled={self.web_enabled})"
@@ -208,7 +246,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    return Settings()
 
 
 def clear_settings_cache() -> None:

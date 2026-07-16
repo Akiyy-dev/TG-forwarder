@@ -165,7 +165,7 @@ async def run_app() -> None:
     )
 
     source_ids: set[int] = set()
-    for chat_id, _, _ in resolved:
+    for chat_id in channel_service.enabled_chat_ids:
         source_ids.add(chat_id)
         s = str(chat_id)
         if s.startswith("-100"):

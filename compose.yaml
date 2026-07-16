@@ -1,0 +1,155 @@
+x-app-environment: &app-environment
+  APP_ENV: production
+  DATABASE_URL: postgresql+asyncpg://forwarder:${POSTGRES_PASSWORD}@postgres:5432/forwarder
+  REDIS_URL: redis://redis:6379/0
+  DOWNLOAD_DIR: /data/downloads
+  TARGET_CHANNEL_ID: ${TARGET_CHANNEL_ID}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+x-app-service: &app-service
+  build:
+    context: .
+    dockerfile: docker/app.Dockerfile
+  restart: unless-stopped
+  environment: *app-environment
+  volumes:
+    - media-data:/data/downloads
+    - ./config:/app/config
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: forwarder
+      POSTGRES_USER: forwarder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forwarder -d forwarder"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app-service
+    command: ["python", "-m", "app.entrypoints.web"]
+    environment:
+      <<: *app-environment
+      APP_ROLE: web
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8000
+      WEB_SECRET_KEY: ${WEB_SECRET_KEY}
+      WEB_ADMIN_USERNAME: ${WEB_ADMIN_USERNAME:-admin}
+      WEB_ADMIN_PASSWORD_HASH: ${WEB_ADMIN_PASSWORD_HASH:-}
+      WEB_SECURE_COOKIES: ${WEB_SECURE_COOKIES:-false}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  sender:
+    <<: *app-service
+    command: ["python", "-m", "app.entrypoints.sender"]
+    environment:
+      <<: *app-environment
+      APP_ROLE: sender
+      BOT_TOKEN: ${BOT_TOKEN}
+      BOT_ADMIN_IDS: ${BOT_ADMIN_IDS}
+      SAFEW_AUTO_REGISTER_SOURCES: ${SAFEW_AUTO_REGISTER_SOURCES:-true}
+    volumes:
+      - media-data:/data/downloads
+      - history-data:/data/history
+      - ./config:/app/config
+
+  telegram-receiver:
+    <<: *app-service
+    command: ["python", "-m", "app.entrypoints.telegram_receiver"]
+    environment:
+      <<: *app-environment
+      APP_ROLE: telegram-receiver
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_PHONE: ${TELEGRAM_PHONE:-}
+      TELEGRAM_SESSION_PATH: /data/sessions/listener
+      SOURCE_CHANNELS: ${SOURCE_CHANNELS:-}
+    volumes:
+      - media-data:/data/downloads
+      - telegram-session:/data/sessions
+      - ./config:/app/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  safew-receiver:
+    build:
+      context: .
+      dockerfile: docker/safew.Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ROLE: safew-receiver
+      APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REDIS_URL: redis://redis:6379/0
+      NOVNC_PASSWORD: ${NOVNC_PASSWORD}
+      SAFEW_APP_NAMES: ${SAFEW_APP_NAMES:-SafeW}
+      SAFEW_ALLOWED_CHATS: ${SAFEW_ALLOWED_CHATS:-}
+      SAFEW_CAPTURE_ALL_APPS: ${SAFEW_CAPTURE_ALL_APPS:-false}
+    volumes:
+      - safew-profile:/data/safew-profile
+      - safew-home:/data/safew-home
+      - safew-novnc:/data/novnc
+    ports:
+      - "127.0.0.1:${NOVNC_PORT:-6080}:6080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    shm_size: 512mb
+
+volumes:
+  postgres-data:
+  redis-data:
+  media-data:
+  history-data:
+  telegram-session:
+  safew-profile:
+  safew-home:
+  safew-novnc:

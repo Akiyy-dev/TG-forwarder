@@ -51,6 +51,13 @@ class ChannelService:
     def enabled_chat_ids(self) -> set[int]:
         return set(self._enabled_ids)
 
+    @property
+    def configured_chat_ids(self) -> set[int]:
+        return set(self._configs)
+
+    def is_enabled(self, chat_id: int) -> bool:
+        return chat_id in self._enabled_ids
+
     def get_target_for(self, source_chat_id: int) -> int:
         targets = self.get_targets_for(source_chat_id)
         if targets:

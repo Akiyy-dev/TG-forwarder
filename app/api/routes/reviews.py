@@ -327,10 +327,25 @@ async def publish_review(
     else:
         raise AppError("invalid_state", f"Cannot publish from status {status}", status_code=400)
 
+    if ctx.command_bus is not None:
+        command_id = await ctx.command_bus.publish_command(
+            "publish_review",
+            {
+                "task_id": task_id,
+                "expected_revision": revision,
+                "user_id": user.id,
+            },
+        )
+        return Envelope(
+            data={
+                "status": "queued",
+                "command_id": command_id,
+                "review_task_id": task_id,
+            }
+        )
+
     result = await _publish_svc(ctx).publish_task(
-        task_id,
-        expected_revision=revision,
-        user_id=user.id,
+        task_id, expected_revision=revision, user_id=user.id
     )
     if result.get("status") == "conflict":
         raise AppError("conflict", "Publish race lost or already handled", status_code=409)
@@ -420,7 +435,20 @@ async def batch_publish(
                     detail={"batch": True},
                 )
                 revision = approved.revision
-            outcome = await pub.publish_task(task_id, expected_revision=revision, user_id=user.id)
+            if ctx.command_bus is not None:
+                command_id = await ctx.command_bus.publish_command(
+                    "publish_review",
+                    {
+                        "task_id": task_id,
+                        "expected_revision": revision,
+                        "user_id": user.id,
+                    },
+                )
+                outcome = {"status": "queued", "command_id": command_id}
+            else:
+                outcome = await pub.publish_task(
+                    task_id, expected_revision=revision, user_id=user.id
+                )
             results.append({"id": task_id, "ok": True, "result": outcome})
         except Exception as exc:
             results.append({"id": task_id, "ok": False, "error": str(exc)})

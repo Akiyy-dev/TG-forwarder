@@ -1,5 +1,9 @@
 # TG-forwarder
 
+> SafeW 账号监听 + Telegram 发布的四容器版本，请查看
+> [SafeW + Telegram Compose 部署指南](docs/safew-compose.md)。当前 SafeW 接收端以 Linux
+> 桌面通知文字为第一阶段目标。
+
 Telegram 频道消息转发与处理系统：用 **Telethon 普通用户账号** 监听已加入的来源频道，经可插拔规则管道处理后，再用 **aiogram Bot** 发布到目标频道（重新发送，不显示原始转发来源）。
 
 ## 工作流程

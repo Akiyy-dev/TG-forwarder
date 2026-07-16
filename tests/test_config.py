@@ -27,3 +27,20 @@ def test_settings_require_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEB_ENABLED", "false")
     with pytest.raises(ValidationError):
         Settings()  # type: ignore[call-arg]
+
+
+def test_safew_role_does_not_require_telegram_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "TELEGRAM_API_ID",
+        "TELEGRAM_API_HASH",
+        "BOT_TOKEN",
+        "BOT_ADMIN_IDS",
+        "TARGET_CHANNEL_ID",
+        "SOURCE_CHANNELS",
+        "WEB_SECRET_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = Settings(app_role="safew-receiver", _env_file=None)
+    assert settings.app_role == "safew-receiver"
