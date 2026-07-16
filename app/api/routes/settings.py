@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -47,10 +48,8 @@ async def put_settings(
         if meta.get("secret") or meta.get("apply") == "restart":
             continue
         if hasattr(ctx.settings, key):
-            try:
+            with contextlib.suppress(Exception):
                 setattr(ctx.settings, key, value)
-            except Exception:  # noqa: BLE001
-                pass
     if "history_enabled" in body.values or "history_max_per_source" in body.values:
         HistoryService().prune_all()
     return Envelope(data={**result, "values": runtime.export_for_api(ctx.settings)["values"]})

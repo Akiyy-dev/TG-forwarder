@@ -510,7 +510,7 @@ class ChannelService:
     async def _replace_source_links(
         self, session: AsyncSession, source_id: int, target_refs: list[int]
     ) -> list[int]:
-        """Replace all links for source; target_refs are DB ids or chat_ids. Returns telegram chat_ids."""
+        """Replace links for source; refs are DB/chat ids. Returns telegram chat_ids."""
         target_db_ids = await self._resolve_target_db_ids(session, target_refs)
         existing = (
             await session.execute(
