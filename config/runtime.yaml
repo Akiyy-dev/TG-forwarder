@@ -1,5 +1,7 @@
 # Runtime overrides (non-secret). Managed by Web 设置中心.
 review_auto_publish_seconds: 10
+review_auto_approve_enabled: true
+review_auto_approve_minutes: 10
 history_enabled: false
 history_max_per_source: 100
 history_dir: ./data/history

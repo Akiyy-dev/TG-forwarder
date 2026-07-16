@@ -19,6 +19,8 @@ from app.database.session import dispose_engine, init_db
 from app.listeners.telegram_listener import TelegramListener
 from app.logging import get_logger, setup_logging
 from app.publishers.telegram_publisher import TelegramPublisher
+from app.review.auto_approve import ReviewAutoApproveService
+from app.review.publish import ReviewPublishService
 from app.review.service import ReviewService
 from app.services.channel_service import ChannelService, parse_channel_ref
 from app.services.media_service import MediaService
@@ -222,6 +224,20 @@ async def run_app() -> None:
     await message_service.recover_pending()
     await listener.start()
 
+    review_service = ReviewService(session_factory)
+    publish_service = ReviewPublishService(
+        session_factory,
+        review_service,
+        publisher,
+        media_service,
+    )
+    auto_approve = ReviewAutoApproveService(
+        session_factory,
+        publish_service,
+        is_paused=message_service.refresh_paused,
+    )
+    auto_approve.start()
+
     tasks: set[asyncio.Task[Any]] = {
         asyncio.create_task(dp.start_polling(bot), name="bot_polling"),
         asyncio.create_task(listener.run_until_disconnected(), name="listener"),
@@ -250,6 +266,7 @@ async def run_app() -> None:
     stop_event.set()
     if uvicorn_server is not None:
         uvicorn_server.should_exit = True
+    await auto_approve.stop()
     await listener.stop()
     await message_service.stop_workers()
     await dp.stop_polling()

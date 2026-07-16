@@ -27,6 +27,8 @@ const SECTIONS: { key: string; title: string; groups: string[] }[] = [
 
 const LABELS: Record<string, string> = {
   review_auto_publish_seconds: '批准后自动发布倒计时（秒）',
+  review_auto_approve_enabled: '超时自动批准并发布',
+  review_auto_approve_minutes: '审核超时自动发布（分钟）',
   history_enabled: '启用历史落盘',
   history_max_per_source: '每个来源历史上限',
   history_dir: '历史目录',

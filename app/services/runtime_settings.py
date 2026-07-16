@@ -16,6 +16,8 @@ RUNTIME_PATH = Path("./config/runtime.yaml")
 # Field metadata: default value + how change must be applied.
 FIELD_META: dict[str, dict[str, Any]] = {
     "review_auto_publish_seconds": {"default": 10, "apply": "hot", "group": "review"},
+    "review_auto_approve_enabled": {"default": True, "apply": "hot", "group": "review"},
+    "review_auto_approve_minutes": {"default": 10, "apply": "hot", "group": "review"},
     "history_enabled": {"default": False, "apply": "hot", "group": "history"},
     "history_max_per_source": {"default": 100, "apply": "hot", "group": "history"},
     "history_dir": {"default": "./data/history", "apply": "hot", "group": "history"},
