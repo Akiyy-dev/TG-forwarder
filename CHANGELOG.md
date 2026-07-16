@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.0...v0.3.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* install xz for safew image ([50c5927](https://github.com/Akiyy-dev/TG-forwarder/commit/50c5927ea1174430d30027986b850308cf0e0992))
+
 ## [0.3.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.2.0...v0.3.0) (2026-07-16)
 
 
