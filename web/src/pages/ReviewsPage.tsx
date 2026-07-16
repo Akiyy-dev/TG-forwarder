@@ -20,10 +20,12 @@ import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { listChannels } from '../api/channels'
 import { batchPublish, batchReject, listReviews } from '../api/reviews'
+import { SourceBackendBadge } from '../components/SourceBackendBadge'
 import { useMe } from '../hooks/useAuth'
 import { canWriteReviews } from '../utils/reviewPermissions'
 import { mediaTypeLabel } from '../utils/labels'
 import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
+import { sourceBackendLabel } from '../utils/sourceBackend'
 
 const STATUS_ALL = 'all'
 
@@ -123,7 +125,7 @@ export function ReviewsPage() {
             { value: 'all', label: '全部来源' },
             ...(channels.data?.items ?? []).map((c) => ({
               value: String(c.chat_id),
-              label: c.title || c.username || String(c.chat_id),
+              label: `${sourceBackendLabel(c.source_backend)} · ${c.title || c.username || String(c.chat_id)}`,
             })),
           ]}
           value={sourceChatId}
@@ -205,17 +207,20 @@ export function ReviewsPage() {
                   </Badge>
                 </Table.Td>
                 <Table.Td>
-                  <Text
-                    size="sm"
-                    title={`ID ${row.source_chat_id}`}
-                    lineClamp={1}
-                  >
-                    {row.source_title || String(row.source_chat_id)}
-                    <Text span c="dimmed" size="xs">
-                      {' '}
-                      /{row.source_message_id}
+                  <Group gap={6} wrap="nowrap">
+                    <SourceBackendBadge backend={row.source_backend} size="xs" />
+                    <Text
+                      size="sm"
+                      title={`ID ${row.source_chat_id}`}
+                      lineClamp={1}
+                    >
+                      {row.source_title || String(row.source_chat_id)}
+                      <Text span c="dimmed" size="xs">
+                        {' '}
+                        /{row.source_message_id}
+                      </Text>
                     </Text>
-                  </Text>
+                  </Group>
                 </Table.Td>
                 <Table.Td maw={360}>
                   <Text lineClamp={1} size="sm">

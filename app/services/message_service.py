@@ -28,6 +28,7 @@ from app.services.channel_service import ChannelService
 from app.services.history_service import HistoryService
 from app.services.media_service import MediaService
 from app.services.retry_service import exception_summary
+from app.source_backends import source_backend_for_chat_id
 
 logger = get_logger(__name__)
 
@@ -611,6 +612,7 @@ class MessageService:
             {
                 "source_chat_id": r.source_chat_id,
                 "source_message_id": r.source_message_id,
+                "source_backend": source_backend_for_chat_id(int(r.source_chat_id)),
                 "error": r.error_message,
                 "retry_count": r.retry_count,
             }

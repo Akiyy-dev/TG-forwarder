@@ -1,8 +1,9 @@
 import { apiRequest } from './client'
-import type { PageResult } from './types'
+import type { PageResult, SourceBackend } from './types'
 
 export interface SourceChannel {
   id: number
+  source_backend: SourceBackend
   chat_id: number
   username: string | null
   title: string | null

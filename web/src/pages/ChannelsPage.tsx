@@ -34,12 +34,14 @@ import {
   setChannelTargets,
   setTargetSources,
 } from '../api/channels'
+import { SourceBackendBadge } from '../components/SourceBackendBadge'
 import { useMe } from '../hooks/useAuth'
 import {
   PUBLISH_MODE_OPTIONS,
   permissionStatusLabel,
   publishModeLabel,
 } from '../utils/labels'
+import { sourceBackendLabel } from '../utils/sourceBackend'
 
 function accessLabel(status: string) {
   if (status === 'ok') return '可达'
@@ -88,7 +90,7 @@ export function ChannelsPage() {
     () =>
       (sources.data?.items ?? []).map((s) => ({
         value: String(s.id),
-        label: s.title || s.username || String(s.chat_id),
+        label: `${sourceBackendLabel(s.source_backend)} · ${s.title || s.username || String(s.chat_id)}`,
       })),
     [sources.data],
   )
@@ -197,6 +199,7 @@ export function ChannelsPage() {
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>标题</Table.Th>
+                  <Table.Th>平台</Table.Th>
                   <Table.Th>聊天 ID</Table.Th>
                   <Table.Th>可达</Table.Th>
                   <Table.Th>发布模式</Table.Th>
@@ -209,11 +212,23 @@ export function ChannelsPage() {
                 {(sources.data?.items ?? []).map((ch) => (
                   <Table.Tr key={ch.id}>
                     <Table.Td>{ch.title || ch.username || '-'}</Table.Td>
+                    <Table.Td>
+                      <SourceBackendBadge backend={ch.source_backend} />
+                    </Table.Td>
                     <Table.Td>{ch.chat_id}</Table.Td>
                     <Table.Td>
-                      <Badge color={ch.access_status === 'ok' ? 'teal' : 'orange'} variant="light">
-                        {accessLabel(ch.access_status)}
-                      </Badge>
+                      {ch.source_backend === 'safew' ? (
+                        <Badge color="gray" variant="light">
+                          不适用
+                        </Badge>
+                      ) : (
+                        <Badge
+                          color={ch.access_status === 'ok' ? 'teal' : 'orange'}
+                          variant="light"
+                        >
+                          {accessLabel(ch.access_status)}
+                        </Badge>
+                      )}
                     </Table.Td>
                     <Table.Td>
                       {isAdmin ? (
@@ -261,14 +276,18 @@ export function ChannelsPage() {
                       {isAdmin ? (
                         <Tooltip
                           label={
-                            ch.access_status !== 'ok'
-                              ? '不可达频道无法启用'
+                            ch.source_backend === 'telegram' && ch.access_status === 'missing'
+                              ? 'Telegram 已确认不可达，无法启用'
                               : '切换启用'
                           }
                         >
                           <Switch
                             checked={ch.enabled}
-                            disabled={ch.access_status !== 'ok' && !ch.enabled}
+                            disabled={
+                              ch.source_backend === 'telegram' &&
+                              ch.access_status === 'missing' &&
+                              !ch.enabled
+                            }
                             onChange={(e) =>
                               void patchChannel(ch.id, {
                                 enabled: e.currentTarget.checked,
@@ -379,7 +398,7 @@ export function ChannelsPage() {
                       {isAdmin ? (
                         <Switch
                           checked={t.enabled}
-                          disabled={t.access_status !== 'ok' && !t.enabled}
+                          disabled={t.access_status === 'missing' && !t.enabled}
                           onChange={(e) =>
                             void patchTarget(t.id, { enabled: e.currentTarget.checked })
                               .then(() => qc.invalidateQueries({ queryKey: ['targets'] }))

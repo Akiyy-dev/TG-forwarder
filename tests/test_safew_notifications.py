@@ -12,6 +12,11 @@ from app.listeners.safew_notifications import (
     clean_notification_text,
     safew_chat_id,
 )
+from app.source_backends import (
+    SAFEW_CHAT_ID_BASE,
+    is_safew_chat_id,
+    source_backend_for_chat_id,
+)
 
 
 def test_clean_notification_markup() -> None:
@@ -38,7 +43,10 @@ def test_safew_notification_maps_to_stable_source() -> None:
 
     assert message is not None
     assert message.source_chat_id == safew_chat_id("private group")
-    assert message.source_chat_id < -2_000_000_000_000_000
+    assert message.source_chat_id < -SAFEW_CHAT_ID_BASE
+    assert is_safew_chat_id(message.source_chat_id)
+    assert source_backend_for_chat_id(message.source_chat_id) == "safew"
+    assert source_backend_for_chat_id(-1001234567890) == "telegram"
     assert message.source_chat_title == "Private Group"
     assert message.text == "Alice\nHello"
     assert message.date == received_at

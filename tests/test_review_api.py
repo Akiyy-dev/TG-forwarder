@@ -11,6 +11,7 @@ from app.auth.service import AuthService
 from app.config import Settings
 from app.context import AppContext
 from app.database.models import ProcessedMessage
+from app.listeners.safew_notifications import safew_chat_id
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.publish import ReviewPublishService
 from app.review.service import ReviewService
@@ -46,11 +47,14 @@ def _ctx(
 
 async def _seed_task(
     session_factory: async_sessionmaker[AsyncSession],
+    *,
+    source_chat_id: int = -1001,
+    source_message_id: int = 7,
 ) -> int:
     async with session_factory() as session:
         processed = ProcessedMessage(
-            source_chat_id=-1001,
-            source_message_id=7,
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
             status="pending_review",
             target_chat_id=-1002,
         )
@@ -66,8 +70,8 @@ async def _seed_task(
             processed=processed,
             original_text="hello original",
             processed_message=NormalizedMessage(
-                source_chat_id=-1001,
-                source_message_id=7,
+                source_chat_id=source_chat_id,
+                source_message_id=source_message_id,
                 text="hello processed",
                 media_type=MediaType.TEXT,
                 target_chat_id=-1002,
@@ -86,6 +90,11 @@ async def test_review_edit_publish_api(
     ctx = _ctx(settings_env, session_factory, publisher)
     await ctx.auth_service.create_user(username="rev", password="password123", role=Role.REVIEWER)
     task_id = await _seed_task(session_factory)
+    safew_task_id = await _seed_task(
+        session_factory,
+        source_chat_id=safew_chat_id("SafeW Group"),
+        source_message_id=8,
+    )
     app = create_api_app(ctx)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -96,9 +105,14 @@ async def test_review_edit_publish_api(
         listed = await client.get("/api/v1/reviews")
         assert listed.status_code == 200
         assert listed.json()["data"]["meta"]["total"] >= 1
+        safew_item = next(
+            item for item in listed.json()["data"]["items"] if item["id"] == safew_task_id
+        )
+        assert safew_item["source_backend"] == "safew"
 
         detail = await client.get(f"/api/v1/reviews/{task_id}")
         assert detail.status_code == 200
+        assert detail.json()["data"]["task"]["source_backend"] == "telegram"
         revision = detail.json()["data"]["task"]["revision"]
 
         edited = await client.post(

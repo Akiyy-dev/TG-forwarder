@@ -14,6 +14,7 @@ from app.api.schemas import APIModel, Envelope
 from app.context import AppContext
 from app.schemas.channel import PublishMode
 from app.services.channel_service import ChannelServiceError
+from app.source_backends import source_backend_for_chat_id
 
 router = APIRouter(tags=["channels"])
 
@@ -28,6 +29,7 @@ def _listener_client(ctx: AppContext) -> Any:
 class SourceChannelOut(APIModel):
     id: int
     chat_id: int
+    source_backend: str = "telegram"
     username: str | None = None
     title: str | None = None
     enabled: bool
@@ -125,10 +127,13 @@ def _map_err(exc: ChannelServiceError) -> AppError:
 
 async def _source_out(ctx: AppContext, row: Any) -> SourceChannelOut:
     target_ids = await ctx.channel_service.get_linked_target_ids(row.id)
-    data = SourceChannelOut.model_validate(row).model_dump()
-    data["target_ids"] = target_ids
-    data["access_status"] = getattr(row, "access_status", "unknown") or "unknown"
-    return SourceChannelOut.model_validate(data)
+    return SourceChannelOut.model_validate(row).model_copy(
+        update={
+            "target_ids": target_ids,
+            "access_status": getattr(row, "access_status", "unknown") or "unknown",
+            "source_backend": source_backend_for_chat_id(int(row.chat_id)),
+        }
+    )
 
 
 async def _target_out(ctx: AppContext, row: Any) -> TargetChannelOut:

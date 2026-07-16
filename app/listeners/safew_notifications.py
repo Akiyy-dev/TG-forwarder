@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.schemas.message import MediaType, NormalizedMessage
+from app.source_backends import SAFEW_CHAT_ID_BASE
 
 _TAG_RE = re.compile(r"<[^>]*>")
 _BREAK_RE = re.compile(r"<\s*br\s*/?\s*>", flags=re.IGNORECASE)
@@ -26,7 +27,7 @@ def clean_notification_text(value: str) -> str:
 def safew_chat_id(title: str) -> int:
     """Map a SafeW conversation title into a reserved signed 64-bit range."""
     digest = hashlib.blake2b(title.casefold().encode("utf-8"), digest_size=7).digest()
-    return -(2_000_000_000_000_000 + int.from_bytes(digest, "big"))
+    return -(SAFEW_CHAT_ID_BASE + int.from_bytes(digest, "big"))
 
 
 def safew_message_id(received_at: datetime, notification_id: int, text: str) -> int:

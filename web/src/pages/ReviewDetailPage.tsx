@@ -27,6 +27,7 @@ import {
   restoreReview,
 } from '../api/reviews'
 import { getSettings } from '../api/settings'
+import { SourceBackendBadge } from '../components/SourceBackendBadge'
 import { useMe } from '../hooks/useAuth'
 import {
   canApproveTask,
@@ -181,6 +182,7 @@ export function ReviewDetailPage() {
             <Badge color={reviewStatusColor(task.status)} variant="light">
               {reviewStatusLabel(task.status)}
             </Badge>
+            <SourceBackendBadge backend={task.source_backend} />
             <Badge variant="outline">版本 {task.revision}</Badge>
           </Group>
           <Text c="dimmed" size="sm" title={`来源 ID ${task.source_chat_id}`}>

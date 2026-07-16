@@ -17,6 +17,7 @@ from app.database.models import ContentRevision, ReviewAction, ReviewTask
 from app.review.publish import ReviewPublishService
 from app.review.service import ReviewConflictError, ReviewService
 from app.review.state_machine import IllegalTransitionError, ReviewActionType, ReviewStatus
+from app.source_backends import source_backend_for_chat_id
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -28,6 +29,7 @@ class ReviewOut(APIModel):
     status: str
     source_chat_id: int
     source_message_id: int
+    source_backend: str = "telegram"
     source_title: str | None = None
     target_chat_id: int | None
     target_chat_ids: list[int] | None = None
@@ -46,11 +48,14 @@ class ReviewOut(APIModel):
     published_at: Any = None
 
 
-def _enrich_review(ctx: AppContext, row: Any) -> dict[str, Any]:
-    data = ReviewOut.model_validate(row).model_dump(mode="json")
-    data["source_title"] = ctx.channel_service.display_name(int(row.source_chat_id))
-    data["target_chat_ids"] = getattr(row, "target_chat_ids", None)
-    return data
+def _enrich_review(ctx: AppContext, row: Any) -> ReviewOut:
+    return ReviewOut.model_validate(row).model_copy(
+        update={
+            "source_title": ctx.channel_service.display_name(int(row.source_chat_id)),
+            "target_chat_ids": getattr(row, "target_chat_ids", None),
+            "source_backend": source_backend_for_chat_id(int(row.source_chat_id)),
+        }
+    )
 
 
 class EditReviewRequest(APIModel):
@@ -121,7 +126,7 @@ async def list_reviews(
                 await session.execute(list_stmt.offset(params.offset).limit(params.page_size))
             ).scalars()
         )
-    items = [_enrich_review(ctx, r) for r in rows]
+    items = [_enrich_review(ctx, r).model_dump(mode="json") for r in rows]
     return Envelope(data=build_page(items=items, total=total, params=params))
 
 
@@ -156,7 +161,7 @@ async def get_review(
         )
     return Envelope(
         data={
-            "task": _enrich_review(ctx, task),
+            "task": _enrich_review(ctx, task).model_dump(mode="json"),
             "revisions": [
                 {
                     "revision_number": r.revision_number,
@@ -206,7 +211,7 @@ async def reapply_rules(
         raise AppError("invalid_state", str(exc), status_code=400) from exc
     data: dict[str, Any] = {"preview": preview}
     if task is not None:
-        data["task"] = ReviewOut.model_validate(task).model_dump(mode="json")
+        data["task"] = _enrich_review(ctx, task).model_dump(mode="json")
     return Envelope(data=data)
 
 
@@ -229,7 +234,7 @@ async def edit_review(
         raise AppError("conflict", exc.message, status_code=409) from exc
     except (LookupError, IllegalTransitionError) as exc:
         raise AppError("invalid_state", str(exc), status_code=400) from exc
-    return Envelope(data=ReviewOut.model_validate(task))
+    return Envelope(data=_enrich_review(ctx, task))
 
 
 @router.post("/{task_id}/approve", response_model=Envelope[ReviewOut])
@@ -256,7 +261,7 @@ async def approve_review(
         raise AppError("conflict", exc.message, status_code=409) from exc
     except (LookupError, IllegalTransitionError) as exc:
         raise AppError("invalid_state", str(exc), status_code=400) from exc
-    return Envelope(data=ReviewOut.model_validate(task))
+    return Envelope(data=_enrich_review(ctx, task))
 
 
 @router.post("/{task_id}/reject", response_model=Envelope[ReviewOut])
@@ -283,7 +288,7 @@ async def reject_review(
         raise AppError("conflict", exc.message, status_code=409) from exc
     except (LookupError, IllegalTransitionError) as exc:
         raise AppError("invalid_state", str(exc), status_code=400) from exc
-    return Envelope(data=ReviewOut.model_validate(task))
+    return Envelope(data=_enrich_review(ctx, task))
 
 
 @router.post("/{task_id}/publish", response_model=Envelope[dict[str, Any]])
@@ -373,7 +378,7 @@ async def restore_review(
         raise AppError("conflict", exc.message, status_code=409) from exc
     except LookupError as exc:
         raise AppError("not_found", str(exc), status_code=404) from exc
-    return Envelope(data=ReviewOut.model_validate(task))
+    return Envelope(data=_enrich_review(ctx, task))
 
 
 @router.post("/batch/reject", response_model=Envelope[dict[str, Any]])

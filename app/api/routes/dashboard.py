@@ -21,6 +21,7 @@ from app.database.models import (
 )
 from app.review.state_machine import ReviewStatus
 from app.schemas.message import MessageStatus
+from app.source_backends import source_backend_for_chat_id
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -163,6 +164,7 @@ async def dashboard_summary(
                     "status": t.status,
                     "source_chat_id": t.source_chat_id,
                     "source_message_id": t.source_message_id,
+                    "source_backend": source_backend_for_chat_id(int(t.source_chat_id)),
                     "source_title": ctx.channel_service.display_name(int(t.source_chat_id)),
                     "updated_at": t.updated_at.isoformat() if t.updated_at else None,
                 }

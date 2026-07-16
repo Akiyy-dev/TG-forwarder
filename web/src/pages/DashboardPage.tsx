@@ -10,6 +10,7 @@ import {
   Title,
 } from '@mantine/core'
 import { useDashboard } from '../hooks/useDashboard'
+import { SourceBackendBadge } from '../components/SourceBackendBadge'
 import { reviewStatusColor, reviewStatusLabel } from '../utils/reviewStatus'
 
 function StatCard({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
@@ -54,7 +55,7 @@ export function DashboardPage() {
         </Button>
       </Group>
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
         <StatCard
           label="服务状态"
           value={service?.publishing_paused ? '已暂停' : '运行中'}
@@ -63,11 +64,16 @@ export function DashboardPage() {
         <StatCard label="队列长度" value={service?.queue_size ?? '-'} />
         <StatCard label="待审核" value={counts?.pending_review ?? '-'} />
         <StatCard
-          label="组件"
-          value={[
-            service?.listener_running ? '监听器正常' : '监听器离线',
-            service?.bot_available ? 'Bot 正常' : 'Bot 离线',
-          ].join(' · ')}
+          label="Telegram 接收端"
+          value={service ? (service.telegram_receiver_running ? '运行中' : '未运行') : '-'}
+        />
+        <StatCard
+          label="SafeW 接收端"
+          value={service ? (service.safew_receiver_running ? '运行中' : '未运行') : '-'}
+        />
+        <StatCard
+          label="发送端"
+          value={service ? (service.sender_running ? '运行中' : '未运行') : '-'}
         />
       </SimpleGrid>
 
@@ -107,10 +113,12 @@ export function DashboardPage() {
                   </Badge>
                 </Table.Td>
                 <Table.Td title={`ID ${row.source_chat_id}`}>
-                  {String(
-                    (row as { source_title?: string }).source_title || row.source_chat_id,
-                  )}
-                  /{row.source_message_id}
+                  <Group gap={6} wrap="nowrap">
+                    <SourceBackendBadge backend={row.source_backend} size="xs" />
+                    <Text size="sm">
+                      {String(row.source_title || row.source_chat_id)}/{row.source_message_id}
+                    </Text>
+                  </Group>
                 </Table.Td>
                 <Table.Td>{row.updated_at ?? '-'}</Table.Td>
               </Table.Tr>
@@ -142,7 +150,12 @@ export function DashboardPage() {
             {(data?.recent_errors ?? []).map((row, idx) => (
               <Table.Tr key={`${row.source_chat_id}-${row.source_message_id}-${idx}`}>
                 <Table.Td>
-                  {row.source_chat_id}/{row.source_message_id}
+                  <Group gap={6} wrap="nowrap">
+                    <SourceBackendBadge backend={row.source_backend} size="xs" />
+                    <Text size="sm">
+                      {row.source_chat_id}/{row.source_message_id}
+                    </Text>
+                  </Group>
                 </Table.Td>
                 <Table.Td>{row.retry_count}</Table.Td>
                 <Table.Td>{row.error ?? '-'}</Table.Td>

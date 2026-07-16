@@ -10,6 +10,7 @@ from app.auth.service import AuthService
 from app.config import Settings
 from app.context import AppContext
 from app.database.models import ProcessedMessage, ReviewTask
+from app.listeners.safew_notifications import safew_chat_id
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.schemas.channel import PublishMode
 from app.schemas.message import MediaType, MessageStatus, NormalizedMessage
@@ -68,7 +69,15 @@ async def test_channels_crud_default_review(
         assert created.status_code == 200
         data = created.json()["data"]
         assert data["publish_mode"] == PublishMode.REVIEW.value
+        assert data["source_backend"] == "telegram"
         source_id = data["id"]
+
+        safew = await client.post(
+            "/api/v1/channels",
+            json={"chat_id": safew_chat_id("SafeW Group"), "title": "SafeW Group"},
+        )
+        assert safew.status_code == 200
+        assert safew.json()["data"]["source_backend"] == "safew"
 
         patched = await client.patch(
             f"/api/v1/channels/{source_id}",

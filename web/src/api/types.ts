@@ -1,4 +1,5 @@
 export type Role = 'viewer' | 'reviewer' | 'super_admin'
+export type SourceBackend = 'telegram' | 'safew'
 
 export interface User {
   id: number
@@ -28,6 +29,9 @@ export interface DashboardSummary {
     started_at: string
     publishing_paused: boolean
     listener_running: boolean
+    telegram_receiver_running: boolean
+    safew_receiver_running: boolean
+    sender_running: boolean
     bot_available: boolean
     queue_size: number
   }
@@ -43,6 +47,7 @@ export interface DashboardSummary {
     by_status: Record<string, number>
   }
   recent_errors: Array<{
+    source_backend: SourceBackend
     source_chat_id: number
     source_message_id: number
     error: string | null
@@ -51,8 +56,10 @@ export interface DashboardSummary {
   recent_reviews: Array<{
     id: number
     status: string
+    source_backend: SourceBackend
     source_chat_id: number
     source_message_id: number
+    source_title?: string | null
     updated_at: string | null
   }>
 }
@@ -72,6 +79,7 @@ export interface PageResult<T> {
 export interface ReviewTask {
   id: number
   status: string
+  source_backend: SourceBackend
   source_chat_id: number
   source_message_id: number
   source_title?: string | null

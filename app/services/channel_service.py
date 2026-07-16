@@ -14,6 +14,7 @@ from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
 from app.schemas.channel import PublishMode, SourceChannelConfig
 from app.services.telegram_account import check_channel_accessible, list_broadcast_channels
+from app.source_backends import is_safew_chat_id
 
 logger = get_logger(__name__)
 
@@ -271,10 +272,8 @@ class ChannelService:
     async def create_source(self, data: dict[str, Any], *, client: Any = None) -> SourceChannel:
         chat_id = int(data["chat_id"])
         mode = PublishMode(data.get("publish_mode", PublishMode.REVIEW))
-        access = await self._resolve_access(
-            client,
-            chat_id=chat_id,
-            username=data.get("username"),
+        access = await self._resolve_source_access(
+            client, chat_id=chat_id, username=data.get("username")
         )
         want_enabled = bool(data.get("enabled", True))
         # Only force-disable when Telethon confirmed the channel is unreachable.
@@ -328,7 +327,9 @@ class ChannelService:
                 channel.title = data["title"]
             if "enabled" in data:
                 want = bool(data["enabled"])
-                if want and (channel.access_status or "unknown") == "missing":
+                if want and is_safew_chat_id(channel.chat_id):
+                    channel.access_status = "ok"
+                elif want and (channel.access_status or "unknown") == "missing":
                     # Re-verify if client available
                     access = await self._resolve_access(
                         client,
@@ -481,6 +482,18 @@ class ChannelService:
             "chat_id": result.get("chat_id") or chat_id,
             "error": result.get("error"),
         }
+
+    async def _resolve_source_access(
+        self,
+        client: Any,
+        *,
+        chat_id: int,
+        username: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve source access without probing SafeW ids through Telegram."""
+        if is_safew_chat_id(chat_id):
+            return {"status": "ok", "username": username, "title": None, "chat_id": chat_id}
+        return await self._resolve_access(client, chat_id=chat_id, username=username)
 
     async def _resolve_target_db_ids(self, session: AsyncSession, ids: list[int]) -> list[int]:
         """Accept target DB ids or telegram chat_ids; return target DB ids."""
@@ -686,6 +699,11 @@ class ChannelService:
             async with self.session_factory() as session:
                 repo = ChannelRepository(session)
                 for ch in await repo.list_all():
+                    if is_safew_chat_id(ch.chat_id):
+                        if ch.access_status != "ok":
+                            ch.access_status = "ok"
+                            updated += 1
+                        continue
                     status = "ok" if ch.chat_id in accessible_ids else "missing"
                     if ch.access_status != status:
                         ch.access_status = status
