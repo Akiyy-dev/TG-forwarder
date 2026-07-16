@@ -30,6 +30,7 @@ class AppContext:
     listener: TelegramListener | None = None
     bot: Bot | None = None
     dispatcher: Dispatcher | None = None
+    command_bus: Any | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     login_limiter: SlidingWindowRateLimiter | None = None
 

@@ -23,6 +23,9 @@ dependencies = [
     "pwdlib[argon2]>=0.2.0",
     "httpx>=0.27.0",
     "PyYAML>=6.0.2",
+    "asyncpg>=0.30.0,<1",
+    "redis>=5.2.0,<7",
+    "dbus-next>=0.2.3,<1",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +40,10 @@ dev = [
 
 [project.scripts]
 tg-forwarder = "app.main:main"
+tg-forwarder-web = "app.entrypoints.web:main"
+tg-forwarder-sender = "app.entrypoints.sender:main"
+tg-forwarder-telegram-receiver = "app.entrypoints.telegram_receiver:main"
+tg-forwarder-safew-receiver = "app.entrypoints.safew_receiver:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
@@ -67,12 +74,16 @@ packages = ["app"]
 exclude = ["migrations", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["telethon.*", "jose.*", "pwdlib.*"]
+module = ["telethon.*", "jose.*", "pwdlib.*", "redis.*", "dbus_next.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["app.listeners.telegram_listener"]
 disable_error_code = ["untyped-decorator"]
+
+[[tool.mypy.overrides]]
+module = ["app.listeners.freedesktop_notifications"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

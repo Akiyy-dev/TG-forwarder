@@ -400,6 +400,11 @@ async def check_target_permissions(
     _admin: SuperAdminUser,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[dict[str, Any]]:
+    if ctx.command_bus is not None:
+        command_id = await ctx.command_bus.publish_command(
+            "check_target_permissions", {"target_id": target_id}
+        )
+        return Envelope(data={"queued": True, "command_id": command_id})
     bot = ctx.bot or getattr(ctx.publisher, "bot", None)
     try:
         result = await ctx.channel_service.check_target_permissions(target_id, bot)
@@ -415,6 +420,12 @@ async def send_target_test_message(
     _admin: SuperAdminUser,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[dict[str, Any]]:
+    if ctx.command_bus is not None:
+        command_id = await ctx.command_bus.publish_command(
+            "send_target_test_message",
+            {"target_id": target_id, "text": body.text},
+        )
+        return Envelope(data={"queued": True, "command_id": command_id})
     bot = ctx.bot or getattr(ctx.publisher, "bot", None)
     try:
         result = await ctx.channel_service.send_target_test_message(target_id, bot, body.text)

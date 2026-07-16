@@ -30,14 +30,29 @@ async def system_status(
 ) -> Envelope[dict[str, Any]]:
     paused = await ctx.message_service.refresh_paused()
     stats = await ctx.message_service.stats()
+    bus = ctx.command_bus
+    distributed = bus is not None
+    telegram_receiver_running = ctx.listener is not None
+    safew_receiver_running = False
+    sender_running = ctx.bot is not None or getattr(ctx.publisher, "bot", None) is not None
+    if bus is not None:
+        telegram_receiver_running, safew_receiver_running, sender_running = await asyncio.gather(
+            bus.role_alive("telegram-receiver"),
+            bus.role_alive("safew-receiver"),
+            bus.role_alive("sender"),
+        )
     return Envelope(
         data={
             "started_at": ctx.started_at.isoformat(),
+            "distributed": distributed,
             "publishing_paused": paused,
             "queue_size": ctx.message_service.queue_size,
             "last_error": ctx.message_service.last_error,
-            "listener_running": ctx.listener is not None,
-            "bot_available": ctx.bot is not None or getattr(ctx.publisher, "bot", None) is not None,
+            "listener_running": telegram_receiver_running or safew_receiver_running,
+            "telegram_receiver_running": telegram_receiver_running,
+            "safew_receiver_running": safew_receiver_running,
+            "sender_running": sender_running,
+            "bot_available": sender_running,
             "message_stats": stats,
         }
     )
@@ -57,6 +72,17 @@ async def system_resume(
     _admin: SuperAdminUser,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[dict[str, Any]]:
+    if ctx.command_bus is not None:
+        await ctx.message_service.set_paused(False)
+        command_id = await ctx.command_bus.publish_command("recover_pending")
+        return Envelope(
+            data={
+                "publishing_paused": False,
+                "requeued": 0,
+                "queued": True,
+                "command_id": command_id,
+            }
+        )
     requeued = await ctx.message_service.resume_publishing()
     return Envelope(data={"publishing_paused": False, "requeued": requeued})
 
@@ -72,6 +98,9 @@ async def system_recover(
             "Publishing is paused; resume before recovering",
             status_code=400,
         )
+    if ctx.command_bus is not None:
+        command_id = await ctx.command_bus.publish_command("recover_pending")
+        return Envelope(data={"requeued": 0, "queued": True, "command_id": command_id})
     requeued = await ctx.message_service.recover_pending()
     return Envelope(data={"requeued": requeued})
 

@@ -48,6 +48,9 @@ data/downloads/*
 *.session
 *.session-journal
 
+# Locally supplied SafeW packages and extracted analysis
+image/
+
 # Logs
 *.log
 logs/

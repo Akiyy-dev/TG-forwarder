@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -29,6 +30,19 @@ async def dashboard_summary(
     _user: ViewerUser,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> Envelope[dict[str, Any]]:
+    # Sender and Web have separate in-memory caches in Compose mode.
+    await ctx.channel_service.load_from_db()
+    bus = ctx.command_bus
+    distributed = bus is not None
+    telegram_receiver_running = ctx.listener is not None
+    safew_receiver_running = False
+    sender_running = ctx.bot is not None or getattr(ctx.publisher, "bot", None) is not None
+    if bus is not None:
+        telegram_receiver_running, safew_receiver_running, sender_running = await asyncio.gather(
+            bus.role_alive("telegram-receiver"),
+            bus.role_alive("safew-receiver"),
+            bus.role_alive("sender"),
+        )
     message_stats = await ctx.message_service.stats()
     recent_errors = await ctx.message_service.recent_errors()
     paused = await ctx.message_service.refresh_paused()
@@ -121,11 +135,14 @@ async def dashboard_summary(
         data={
             "service": {
                 "web_enabled": ctx.settings.web_enabled,
+                "distributed": distributed,
                 "started_at": ctx.started_at.isoformat(),
                 "publishing_paused": paused,
-                "listener_running": ctx.listener is not None,
-                "bot_available": ctx.bot is not None
-                or getattr(ctx.publisher, "bot", None) is not None,
+                "listener_running": telegram_receiver_running or safew_receiver_running,
+                "telegram_receiver_running": telegram_receiver_running,
+                "safew_receiver_running": safew_receiver_running,
+                "sender_running": sender_running,
+                "bot_available": sender_running,
                 "queue_size": ctx.message_service.queue_size,
             },
             "counts": {

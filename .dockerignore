@@ -1,0 +1,11 @@
+.git
+.venv
+data
+image/**
+!image/
+!image/tsetup.3.6.2.tar.xz
+web/node_modules
+web/dist
+**/__pycache__
+**/*.pyc
+.env

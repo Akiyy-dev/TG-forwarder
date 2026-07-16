@@ -1,98 +1,65 @@
 # TG-forwarder
 
-Telegram 频道消息转发与处理系统：用 **Telethon 普通用户账号** 监听已加入的来源频道，经可插拔规则管道处理后，再用 **aiogram Bot** 发布到目标频道（重新发送，不显示原始转发来源）。
+将 Telegram 或 SafeW 中当前账号有权读取的新消息，经规则处理、审核和去重后，由
+Telegram Bot 发布到目标频道。
 
-## 工作流程
+> SafeW 接收目前基于 Linux 桌面通知，只能获取通知中实际显示的会话标题和正文；
+> 不支持历史消息、静音会话和媒体原文件。
+
+## 运行方式
+
+| 方式 | 适用场景 | 说明 |
+| --- | --- | --- |
+| 单进程 | 只监听 Telegram | Telethon 用户账号接收，aiogram Bot 发布，可选 Web 管理面板 |
+| Docker Compose | Telegram + SafeW | Web、发送端、Telegram 接收端、SafeW 接收端分开维护 |
+
+Compose 架构：
 
 ```text
-来源频道 → Telethon 监听 → 消息标准化 → 过滤/替换/链接/Footer/去重
-        → 异步队列 Worker → aiogram Bot 发布 → 目标频道
+Telegram 用户账号 ─┐
+                   ├─> Redis ─> sender ─> Telegram 目标频道
+SafeW 桌面通知 ────┘               ↑
+                                   │
+浏览器 ─> web ─> PostgreSQL ───────┘
 ```
 
-## 为什么需要用户账号 + Bot
+## 快速开始：Docker Compose
 
-| 角色 | 原因 |
-|------|------|
-| Listener（用户账号） | Bot 无法可靠监听任意你「已加入」的频道帖子；用户账号可以读取其有权访问的频道更新 |
-| Publisher（Bot） | 以频道管理员身份稳定发帖，支持文本/媒体/相册，并提供管理命令 |
-
-本项目**不会**绕过私有频道权限、付费限制或 Telegram 访问控制。请仅监听你有权查看的内容，并遵守来源频道转载规则、Telegram 平台条款与版权要求。
-
-## 准备 Telegram API 凭据
-
-1. 打开 [https://my.telegram.org](https://my.telegram.org)
-2. 使用手机号登录
-3. 创建应用，获得 `api_id` 与 `api_hash`
-4. 填入 `.env`（切勿提交到 Git）
-
-## 创建 Bot 并配置目标频道
-
-1. 与 [@BotFather](https://t.me/BotFather) 对话创建 Bot，获得 `BOT_TOKEN`
-2. 将 Bot 添加为目标频道**管理员**，并授予「发布消息」权限
-3. 将你的 Telegram 数字用户 ID 填入 `BOT_ADMIN_IDS`（可用 `@userinfobot` 等工具查询）
-
-## 配置说明
-
-复制示例文件：
+适用于仅有 Linux 云服务器、需要登录 SafeW 私密群账号的场景。服务器建议至少
+2 核 CPU、4 GB 内存，并安装 Docker Engine 与 Docker Compose。
 
 ```bash
-cp .env.example .env
+cp .env.compose.example .env
+# 编辑 .env，填写 Telegram、Bot、Web、数据库和 noVNC 配置
+
+docker compose build
+docker compose run --rm --no-deps web python -m scripts.hash_password
+# 将生成的密码哈希填回 .env
+
+docker compose run --rm telegram-receiver python -m scripts.create_session
+docker compose up -d
 ```
 
-关键变量：
-
-| 变量 | 说明 |
-|------|------|
-| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | my.telegram.org 凭据 |
-| `TELEGRAM_PHONE` | 仅用于首次 Session 登录提示；验证码不要写入 `.env` |
-| `TELEGRAM_SESSION_PATH` | Session 路径（不含 `.session` 后缀亦可，Telethon 会自动追加） |
-| `BOT_TOKEN` | BotFather Token |
-| `BOT_ADMIN_IDS` | 逗号分隔的管理员用户 ID |
-| `TARGET_CHANNEL_ID` | 目标频道 ID（通常为 `-100...`） |
-| `SOURCE_CHANNELS` | 来源：`@username` 或数字 ID，逗号分隔 |
-| `TEXT_REPLACEMENTS` | `旧=>新` 多组用 `\|` 分隔 |
-| `MESSAGE_FOOTER` | 文末尾注 |
-| 过滤开关 | `ENABLE_*` 系列 |
-
-完整示例见 [.env.example](.env.example)。
-
-## 如何查询频道 ID
+SafeW 首次登录通过 SSH 隧道访问 noVNC：
 
 ```bash
-python -m scripts.resolve_channels
+ssh -L 6080:127.0.0.1:6080 your-user@your-server
 ```
 
-脚本会：
+然后打开
+`http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`，登录 SafeW 并开启消息通知。
 
-1. 列出当前用户账号可访问的频道
-2. 解析 `SOURCE_CHANNELS` 中的 username / ID
-3. 检查来源是否可读
-4. 检查 Bot 对目标频道是否具备发布权限
-5. 输出建议写入 `.env` 的频道 ID（不打印 Token / api_hash）
+完整部署、来源筛选、单容器更新和排障说明见
+[SafeW + Telegram Compose 部署指南](docs/safew-compose.md)。
 
-## 首次生成 Telethon Session
+正式 Release 会将应用镜像发布到 GHCR；SafeW 镜像需要先配置受保护的安装包下载地址和
+SHA-256 校验值。镜像名称、标签和拉取方式也在上述部署指南中说明。
 
-**切勿**把验证码或两步验证密码写入 `.env`。
+## 快速开始：仅 Telegram
 
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-cp .env.example .env
-# 编辑 .env 填入 api_id / api_hash / bot_token 等
-
-python -m scripts.create_session
-```
-
-按提示输入手机号、验证码、（如有）两步验证密码。Session 写入 `data/sessions/`。
-
-## 安装与运行（Linux 服务器）
-
-推荐使用 Python 3.12（兼容 3.11+），在服务器上直接运行进程（可用 `systemd` / `tmux` / `supervisord` 保活）。
+需要 Python 3.11+，推荐 Python 3.12。
 
 ```bash
-git clone https://github.com/Akiyy-dev/TG-forwarder.git
-cd TG-forwarder
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -100,189 +67,50 @@ cp .env.example .env
 # 编辑 .env
 
 python -m scripts.create_session
-alembic upgrade head   # 可选；首次启动也会 create_all
 python -m app.main
 ```
 
-开发时可设 `APP_ENV=development` 获得更易读的控制台日志。
+Windows 激活虚拟环境使用 `.venv\Scripts\activate`。
 
-数据目录（请定期备份）：
+主要配置：
 
-- `./data/sessions` — Telethon Session
-- `./data/database` — SQLite
-- `./data/downloads` — 临时媒体
+| 变量 | 用途 |
+| --- | --- |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | [my.telegram.org](https://my.telegram.org) 应用凭据 |
+| `SOURCE_CHANNELS` | Telegram 来源用户名或频道 ID，逗号分隔 |
+| `BOT_TOKEN` / `BOT_ADMIN_IDS` | 发布 Bot 及管理员 |
+| `TARGET_CHANNEL_ID` | Telegram 目标频道 ID |
+| `SAFEW_ALLOWED_CHATS` | 允许监听的 SafeW 会话标题，留空表示全部 |
 
-### systemd 示例
+所有可用变量与示例值见 [.env.example](.env.example) 和
+[.env.compose.example](.env.compose.example)。
 
-```ini
-# /etc/systemd/system/tg-forwarder.service
-[Unit]
-Description=TG-forwarder
-After=network-online.target
-Wants=network-online.target
+## 管理与开发
 
-[Service]
-Type=simple
-User=tgforwarder
-WorkingDirectory=/opt/TG-forwarder
-Environment=PATH=/opt/TG-forwarder/.venv/bin
-ExecStart=/opt/TG-forwarder/.venv/bin/python -m app.main
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
+Bot 管理命令包括 `/status`、`/sources`、`/stats`、`/retry_failed`、
+`/pause` 和 `/resume`。Web 面板提供来源、规则、审核队列和运行状态管理。
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now tg-forwarder
-sudo journalctl -u tg-forwarder -f
-```
+# 查询当前 Telegram 账号可访问的频道
+python -m scripts.resolve_channels
 
-## 更新与数据库迁移
-
-```bash
-git pull
-source .venv/bin/activate
-pip install -e ".[dev]"
-alembic upgrade head
-# 若用 systemd：sudo systemctl restart tg-forwarder
-```
-
-## Bot 管理命令
-
-仅 `BOT_ADMIN_IDS` 中的用户可用：
-
-| 命令 | 作用 |
-|------|------|
-| `/status` | 监听器 / 队列 / 暂停 / 最近错误 |
-| `/sources` | 来源频道列表 |
-| `/stats` | 过滤 / 发布 / 失败计数 |
-| `/retry_failed` | 重试失败任务 |
-| `/pause` / `/resume` | 暂停/恢复发布；`/resume` 会把 `pending_publish` 等卡住任务重新入队 |
-| `/help` | 帮助 |
-
-## Web 管理面板
-
-启用后同一进程提供 FastAPI + 静态前端（无 Docker）。默认频道发布模式为 **REVIEW**（全部进人工审核）。
-
-### 后端配置
-
-| 变量 | 说明 |
-|------|------|
-| `WEB_ENABLED` | `true` 开启 Web API / SPA |
-| `WEB_HOST` / `WEB_PORT` | 监听地址，默认 `0.0.0.0:8000` |
-| `WEB_SECRET_KEY` | JWT 签名密钥（必填） |
-| `WEB_ALLOWED_ORIGINS` | CORS，开发前端默认 `http://localhost:5173` |
-| `WEB_SECURE_COOKIES` | 生产 HTTPS 下设 `true` |
-| `WEB_DOCS_ENABLED` | 是否暴露 `/api/docs` |
-
-创建管理员：
-
-```bash
-python -m scripts.create_admin
-alembic upgrade head
-```
-
-启动 `python -m app.main` 后，若已构建前端，浏览器打开 `http://<host>:8000/`；API 前缀为 `/api/v1`。
-
-### 前端开发
-
-```bash
-cd web
-npm ci
-npm run dev          # http://localhost:5173 ，/api 代理到 8000
-npm run build        # 输出 web/dist ，由后端同源挂载
-```
-
-主要页面：仪表盘、审核队列/详情、规则管理、频道发布模式、系统状态（实时推送）、日志审计。角色：只读 / 审核员 / 超级管理员。
-
-### 频道与规则配置文件
-
-启动时可从独立 YAML 种子同步进 SQLite（**文件 → DB 单向**；Web 热改不会自动写回文件）：
-
-| 文件 | 说明 |
-|------|------|
-| `config/channels.yaml` | 来源频道种子（见 `config/channels.example.yaml`） |
-| `config/rules.yaml` | 规则种子（见 `config/rules.example.yaml`），含 `has_media` 媒体判断类型 |
-
-- 若 `channels.yaml` 有非空条目，优先于 `SOURCE_CHANNELS`
-- 规则按 `name` upsert，不会删除库中额外规则
-- 环境变量：`CHANNELS_CONFIG_PATH` / `RULES_CONFIG_PATH`
-
-媒体判断规则示例：`rule_type: has_media`，`pattern: has|none`，动作为 `require_review` / `reject` 等。
-
-## 常见错误
-
-| 现象 | 处理 |
-|------|------|
-| Session not authorized | 重新运行 `python -m scripts.create_session` |
-| FloodWait | 程序会按 Telegram 要求等待；降低并发与频率 |
-| Bot 无法发帖 | 确认 Bot 是目标频道管理员且有发帖权 |
-| 相册被拆成多条 | 检查 `grouped_id` 是否正常；查看日志 `album_flushed` |
-| 重复发布 | 查库 `processed_messages` 唯一约束与状态；勿清空 DB 后重放 |
-| 队列积压 | 调高 `MAX_CONCURRENCY` 或检查发布错误 |
-
-## 安全事项
-
-- 不要把 `.env`、`*.session`、Token、手机号、验证码提交到 Git
-- 日志已对 Token / api_hash / 密码等字段脱敏
-- Session 文件权限尽量限制为仅所有者可读写
-- 管理命令会校验管理员 ID
-- 下载文件名会做安全化，防止路径穿越
-
-## 备份
-
-定期备份：
-
-```bash
-cp -a data/sessions data/sessions.bak
-cp -a data/database data/database.bak
-```
-
-丢失 Session 需要重新登录；丢失数据库可能导致历史幂等信息丢失并存在重复发布风险。
-
-## 如何新增 Processor
-
-1. 在 `app/processors/` 实现带 `name` 与 `async def process(message, context)` 的类
-2. 在 `build_default_pipeline()` 中按顺序注册
-3. 用配置开关控制启用
-4. 添加单元测试
-
-处理器应只依赖 `NormalizedMessage`，不要直接依赖 Telethon / aiogram 类型。
-
-## 日志与健康状态
-
-- 生产环境结构化 JSON 日志输出到 stdout（可用 journald / 进程管理器采集）
-- 健康检查：`python -m scripts.healthcheck`
-- Bot：`/status`
-
-## 发布
-
-本仓库使用 [release-please](https://github.com/googleapis/release-please) 与 [Conventional Commits](https://www.conventionalcommits.org/)。
-
-推送到 `main` 且包含 `feat:` / `fix:` 等可发布提交后，会自动维护 Release PR；合并该 PR 后会打 tag、更新 `CHANGELOG.md` 与版本号并创建 GitHub Release。
-
-## 开发与质量检查
-
-```bash
-# 后端
+# 后端检查
 ruff check app scripts tests
 ruff format --check app scripts tests
 mypy app
-pytest
+pytest -q
 
-# 前端
-cd web && npm ci && npm run build
+# 前端检查
+cd web
+npm ci
+npm run build
 ```
 
-CI（GitHub Actions）会对后端跑 ruff/mypy/pytest，并对 `web/` 执行 `npm ci && npm run build`。
+## 安全与限制
 
-## 许可证与合规
+- 仅监听账号本身有权访问的群组或频道，不会绕过私密群权限。
+- 不要提交 `.env`、Telegram Session、Token、手机号、验证码或 SafeW 登录资料。
+- noVNC 和 Web 默认只绑定服务器的 `127.0.0.1`，建议通过 SSH 隧道访问。
+- 请遵守平台条款、来源频道规则、版权要求及适用法律。
 
-使用本软件时请自行确保：
-
-- 你有权读取并转发相关内容
-- 遵守 Telegram ToS 与适用法律
-- 尊重版权与来源频道规定
+项目使用 release-please 与 Conventional Commits 管理版本发布。
