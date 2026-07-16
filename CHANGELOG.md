@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.2.0...v0.3.0) (2026-07-16)
+
+
+### Features
+
+* add SafeW receiver compose architecture ([9cc7928](https://github.com/Akiyy-dev/TG-forwarder/commit/9cc79287785371b7a796e9bd2886a1a781a71a20))
+* add SafeW receiver compose architecture ([f0466da](https://github.com/Akiyy-dev/TG-forwarder/commit/f0466dab591764e19e6edda854167417ab272ad7))
+* publish release container images ([4714269](https://github.com/Akiyy-dev/TG-forwarder/commit/47142693ae568cdaf991bd527f9a0717d258be9e))
+
+
+### Bug Fixes
+
+* format settings and simplify readme ([5bb2c99](https://github.com/Akiyy-dev/TG-forwarder/commit/5bb2c99b9acbfd7978d820cdfc369deb83aede0d))
+
 ## [0.2.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 
