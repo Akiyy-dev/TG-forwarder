@@ -1,135 +1,119 @@
 # TG-forwarder
 
-将 Telegram 或 SafeW 中当前账号有权读取的新消息，经规则处理、审核和去重后，由
-Telegram Bot 发布到目标频道。
+TG-forwarder 是一个带 Web 管理后台的消息处理与转发系统。它使用 Telegram 用户账号或
+SafeW Linux 客户端接收消息，依次执行去重、文本处理、关键词规则和人工审核，最终发布
+到 Telegram 频道，或交付给带 Token 的对外拉取 API。
 
-> SafeW 接收目前基于 Linux 桌面通知，只能获取通知中实际显示的会话标题和正文；
-> 不支持历史消息、静音会话和媒体原文件。
+## 主要能力
 
-## 运行方式
+- Telegram 用户账号监听：支持账号本身有权访问的公开或私密频道、群组；
+- SafeW 通知监听：在 Linux 轻量桌面中运行 SafeW，通过桌面通知获取新消息；
+- Web 管理：来源与目标绑定、规则管理、审核、消息历史、API 目标和系统状态；
+- 多种发布模式：自动发布、人工审核、规则决定和暂停；
+- 多目标路由：一个来源可同时绑定多个 Telegram 目标和多个 API 目标；
+- 对外 API：独立 Token、来源白名单、启停和过期时间，支持游标增量拉取；
+- Docker Compose：Web、发送端、Telegram 接收端和 SafeW 接收端独立维护；
+- 持久化与恢复：PostgreSQL、Redis Streams、Alembic 迁移及处理状态恢复。
 
-| 方式 | 适用场景 | 说明 |
-| --- | --- | --- |
-| 单进程 | 只监听 Telegram | Telethon 用户账号接收，aiogram Bot 发布，可选 Web 管理面板 |
-| Docker Compose | Telegram + SafeW | Web、发送端、Telegram 接收端、SafeW 接收端分开维护 |
-
-Compose 架构：
+## 消息流
 
 ```text
-Telegram 用户账号 ─┐                         ┌─> Telegram 目标频道
-                   ├─> Redis ─> sender ─────┤
-SafeW 桌面通知 ────┘               ↑         └─> 带 Token 的对外 API
-                                   │
-浏览器 ─> web ─> PostgreSQL ───────┘
+Telegram 用户账号 ─> telegram-receiver ─┐
+                                         ├─> Redis Streams ─> sender
+SafeW 桌面通知 ─────> safew-receiver ────┘                    │
+                                                               ├─> 规则 / 审核
+浏览器 ─> web ─> PostgreSQL <──────────────────────────────────┤
+                                                               ├─> Telegram 目标
+                                                               └─> Token API 队列
 ```
 
-## 快速开始：Docker Compose
+频道路由只以 Web 和数据库中的配置为准。`.env` 与 `config/channels.yaml` 不再配置来源
+频道或目标频道。SafeW 新会话可自动登记为来源，默认进入人工审核模式。
 
-适用于仅有 Linux 云服务器、需要登录 SafeW 私密群账号的场景。服务器建议至少
-2 核 CPU、4 GB 内存，并安装 Docker Engine 与 Docker Compose。
+## 快速开始
+
+推荐在 Linux 服务器上使用 Docker Compose。完整前置条件、镜像选择、SafeW 安装包、
+反向代理和升级步骤见[部署文档](docs/deployment.md)。
 
 ```bash
+git clone https://github.com/Akiyy-dev/TG-forwarder.git
+cd TG-forwarder
 cp .env.compose.example .env
-# 编辑 .env，填写 Telegram、Bot、Web、数据库和 noVNC 配置
+chmod 600 .env
 
-docker compose build
+# 编辑 .env 后检查 Compose 展开结果
+docker compose config --quiet
+
+# 使用可访问的 Release 镜像；本地构建则改用 docker compose build
+docker compose pull
+
+# 生成 Web 管理员密码哈希，并将输出整行填回 .env
 docker compose run --rm --no-deps web python -m scripts.hash_password
-# 将生成的密码哈希填回 .env
 
+# 首次创建 Telegram 用户会话
 docker compose run --rm telegram-receiver python -m scripts.create_session
-docker compose up -d
+
+docker compose up -d --no-build
+docker compose ps
 ```
 
-SafeW 首次登录通过 SSH 隧道访问 noVNC：
+Web 和 noVNC 默认只监听服务器 `127.0.0.1`。可通过 SSH 隧道访问：
 
 ```bash
-ssh -L 6080:127.0.0.1:6080 your-user@your-server
+ssh -L 8000:127.0.0.1:8000 -L 6080:127.0.0.1:6080 your-user@your-server
 ```
 
-然后打开
-`http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`，登录 SafeW 并开启消息通知。
+- Web：`http://127.0.0.1:8000`
+- SafeW noVNC：`http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`
 
-完整部署、来源筛选、单容器更新和排障说明见
-[SafeW + Telegram Compose 部署指南](docs/safew-compose.md)。
+首次登录 Web 后，按“Telegram 目标 → 来源频道 → 目标绑定 → 规则/审核”的顺序配置。
+详见[使用指南](docs/user-guide.md)。
 
-正式 Release 会将应用镜像发布到 GHCR；SafeW 镜像需要先配置受保护的安装包下载地址和
-SHA-256 校验值。镜像名称、标签和拉取方式也在上述部署指南中说明。
+## 对外 API
 
-## 快速开始：仅 Telegram
-
-需要 Python 3.11+，推荐 Python 3.12。
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-# 编辑 .env
-
-python -m scripts.create_session
-python -m app.main
-```
-
-Windows 激活虚拟环境使用 `.venv\Scripts\activate`。
-
-主要配置：
-
-| 变量 | 用途 |
-| --- | --- |
-| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | [my.telegram.org](https://my.telegram.org) 应用凭据 |
-| `BOT_TOKEN` | 发布到 Telegram 目标频道的 Bot |
-| `BOT_ADMIN_IDS` | 可使用 Bot 管理命令的 Telegram 用户 ID |
-| `BOT_POLLING_ENABLED` | 是否启用 Bot 管理命令轮询；设为 `false` 仍可正常发布 |
-| `SAFEW_ALLOWED_CHATS` | 允许监听的 SafeW 会话标题，留空表示全部 |
-
-所有可用变量与示例值见 [.env.example](.env.example) 和
-[.env.compose.example](.env.compose.example)。
-
-## 管理与开发
-
-Bot 管理命令包括 `/status`、`/sources`、`/stats`、`/retry_failed`、
-`/pause` 和 `/resume`。Web 面板提供来源、规则、审核队列和运行状态管理。
-Telegram 来源、Telegram 目标以及二者的绑定关系只保存在 PostgreSQL/SQLite 中，统一在
-Web 的“频道管理”页面配置；`.env` 与 `config/channels.yaml` 不再参与频道路由。SafeW
-捕获到的新会话会自动加入来源列表，但仍需在 Web 中绑定目标。“消息历史”显示所有处理
-记录，不受审核队列或可选历史落盘开关影响。
-
-“对外 API”可创建带独立 Token、启用状态和过期时间的拉取目标，并绑定允许接收的来源。
-也可以在“频道管理”的来源行中绑定 API 目标。客户端使用以下方式增量读取已经完成规则
-与审核流程的消息；`next_cursor` 应由客户端持久化并用于下一次请求：
+在 Web 的“对外 API”页面创建 API 目标并绑定来源。Token 只显示一次，服务器只保存哈希。
 
 ```bash
 curl -H 'Authorization: Bearer YOUR_TOKEN' \
-  'https://your-host/api/public/v1/messages?cursor=0&limit=50'
+  'https://example.com/api/public/v1/messages?cursor=0&limit=50'
 ```
 
-Token 只在创建或重置时显示一次，服务端仅保存 SHA-256 哈希。重置 Token 会立即使旧
-Token 失效；停用或到期的 API 目标不能继续拉取，也不会接收新的消息。
-如果同一个 Bot Token 还被其他程序监听，请设置 `BOT_POLLING_ENABLED=false`，避免
-Telegram `getUpdates` 冲突；这只会关闭上述管理命令，不影响消息发布。
+客户端应保存响应中的 `next_cursor`，下次从该游标继续拉取。接口只暴露已经完成规则与
+审核流程的消息。当前返回处理后的文本与媒体元数据，不提供媒体文件二进制下载。
 
-Compose 模式下，Web 对 Telegram 来源的启用或停用会在约 5 秒内由接收端自动加载；
-接收端会短暂重启以更新 Telethon 的频道过滤器。直接运行独立接收端时没有 Compose
-自动拉起能力，应由 systemd 等进程管理器托管，或在来源变更后手动重启。
+完整请求、响应、认证和错误说明见 [API 文档](docs/api.md)。
 
-```bash
-# 后端检查
-ruff check app scripts tests
-ruff format --check app scripts tests
-mypy app
-pytest -q
+## 文档
 
-# 前端检查
-cd web
-npm ci
-npm run build
-```
+1. [API 文档](docs/api.md)：公开消息 API、Web 管理 API、认证和响应格式；
+2. [部署文档](docs/deployment.md)：Compose、本地运行、SafeW、升级、备份和反向代理；
+3. [使用指南](docs/user-guide.md)：频道、发布模式、规则、审核、历史和 API 目标；
+4. [配置参考](docs/configuration.md)：两个环境变量模板的区别及各配置项；
+5. [架构说明](docs/architecture.md)：容器职责、消息生命周期和持久化边界；
+6. [故障排查](docs/troubleshooting.md)：镜像、Session、Compose、SafeW 和 API 常见问题；
+7. [开发与发布](docs/development.md)：本地开发、测试、迁移和 release-please。
 
-## 安全与限制
+也可从 [docs/README.md](docs/README.md) 进入文档目录。
 
-- 仅监听账号本身有权访问的群组或频道，不会绕过私密群权限。
-- 不要提交 `.env`、Telegram Session、Token、手机号、验证码或 SafeW 登录资料。
-- noVNC 和 Web 默认只绑定服务器的 `127.0.0.1`，建议通过 SSH 隧道访问。
-- 请遵守平台条款、来源频道规则、版权要求及适用法律。
+## SafeW 限制
 
-项目使用 release-please 与 Conventional Commits 管理版本发布。
+SafeW 当前通过 Linux 桌面通知获取消息，不使用官方 User API，因此：
+
+- 只能读取当前 SafeW 账号本来有权查看、且确实产生桌面通知的新消息；
+- 无法补取历史消息；静音会话、应用未运行期间的消息可能无法捕获；
+- 通知未展示正文时无法还原正文；
+- 当前不获取媒体原文件、编辑事件或删除事件。
+
+Telegram 接收端仍支持原有的文本和媒体下载流程。
+
+## 安全提示
+
+- 不要提交 `.env`、Telegram Session、手机号、验证码、Token 或 SafeW 登录资料；
+- 生产环境应使用 HTTPS，并设置 `WEB_SECURE_COOKIES=true`；
+- 不要把 noVNC 直接暴露到公网，优先使用 SSH 隧道或带认证的反向代理；
+- 仅监听账号本身有权访问的内容，并遵守平台条款、版权要求和适用法律。
+
+## 许可证与发布
+
+项目使用 release-please 与 Conventional Commits 管理版本发布。SafeW 客户端安装包不包含
+在仓库中；构建或分发 SafeW 镜像前，请自行确认客户端许可。
