@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.2...v0.3.3) (2026-07-17)
+
+
+### Bug Fixes
+
+* harden distributed forwarding lifecycle ([843efe5](https://github.com/Akiyy-dev/TG-forwarder/commit/843efe542282b0a5ef275edfc3ce13736086e2b1))
+
 ## [0.3.2](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.1...v0.3.2) (2026-07-16)
 
 
