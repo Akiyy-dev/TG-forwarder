@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.config_files import load_channels_config
 from app.database.models import SourceChannel, SourceTargetLink, TargetChannel
 from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
@@ -47,6 +48,7 @@ class ChannelService:
         self._configs: dict[int, SourceChannelConfig] = {}
         self._source_by_id: dict[int, int] = {}
         self._target_titles: dict[int, str] = {}
+        self._disabled_target_chat_ids: set[int] = set()
 
     @property
     def enabled_chat_ids(self) -> set[int]:
@@ -59,19 +61,26 @@ class ChannelService:
     def is_enabled(self, chat_id: int) -> bool:
         return chat_id in self._enabled_ids
 
-    def get_target_for(self, source_chat_id: int) -> int:
+    def get_target_for(self, source_chat_id: int) -> int | None:
         targets = self.get_targets_for(source_chat_id)
-        if targets:
-            return targets[0]
-        return self.settings.target_channel_id
+        return targets[0] if targets else None
 
     def get_targets_for(self, source_chat_id: int) -> list[int]:
         cfg = self._configs.get(source_chat_id)
-        if cfg and cfg.target_chat_ids:
-            return list(cfg.target_chat_ids)
-        if cfg and cfg.target_channel_id is not None:
-            return [cfg.target_channel_id]
-        return [self.settings.target_channel_id]
+        if cfg is not None:
+            if cfg.target_chat_ids is not None:
+                return list(cfg.target_chat_ids)
+            if cfg.target_channel_id is not None:
+                return [cfg.target_channel_id]
+            return []
+        fallback = self.settings.target_channel_id
+        if fallback in self._disabled_target_chat_ids:
+            return []
+        return [fallback]
+
+    def is_target_available(self, chat_id: int) -> bool:
+        """Treat unregistered legacy targets as available, but honor disabled DB targets."""
+        return int(chat_id) not in self._disabled_target_chat_ids
 
     def display_name(self, chat_id: int) -> str:
         cfg = self._configs.get(chat_id)
@@ -97,9 +106,14 @@ class ChannelService:
             mode = PublishMode(ch.publish_mode)
         except ValueError:
             mode = PublishMode.REVIEW
-        ids = target_chat_ids
-        if ids is None and ch.target_channel_id is not None:
-            ids = [ch.target_channel_id]
+        if target_chat_ids is None:
+            ids = [ch.target_channel_id] if ch.target_channel_id is not None else None
+            primary_target = ch.target_channel_id
+        else:
+            # An explicit empty list means the source only has disabled or stale
+            # linked targets. Do not revive the legacy target_channel_id value.
+            ids = target_chat_ids
+            primary_target = ids[0] if ids else None
         return SourceChannelConfig(
             id=ch.id,
             chat_id=ch.chat_id,
@@ -107,7 +121,7 @@ class ChannelService:
             title=ch.title,
             enabled=ch.enabled,
             publish_mode=mode,
-            target_channel_id=ids[0] if ids else ch.target_channel_id,
+            target_channel_id=primary_target,
             target_chat_ids=ids,
             access_status=getattr(ch, "access_status", "unknown") or "unknown",
             processing_profile=ch.processing_profile,
@@ -119,14 +133,20 @@ class ChannelService:
         """source_id -> list of target telegram chat_ids."""
         links = (
             await session.execute(
-                select(SourceTargetLink, TargetChannel.chat_id).join(
-                    TargetChannel, SourceTargetLink.target_id == TargetChannel.id
+                select(
+                    SourceTargetLink,
+                    TargetChannel.chat_id,
+                    TargetChannel.enabled,
                 )
+                .outerjoin(TargetChannel, SourceTargetLink.target_id == TargetChannel.id)
+                .order_by(SourceTargetLink.id)
             )
         ).all()
         mapping: dict[int, list[int]] = {}
-        for link, chat_id in links:
-            mapping.setdefault(int(link.source_id), []).append(int(chat_id))
+        for link, chat_id, enabled in links:
+            targets = mapping.setdefault(int(link.source_id), [])
+            if enabled is True and chat_id is not None:
+                targets.append(int(chat_id))
         return mapping
 
     def _apply_cache(
@@ -136,17 +156,27 @@ class ChannelService:
         targets: list[TargetChannel] | None = None,
     ) -> None:
         target_map = target_map or {}
+        targets = targets or []
+        self._disabled_target_chat_ids = {int(t.chat_id) for t in targets if not t.enabled}
+
+        def active_targets_for(ch: SourceChannel) -> list[int] | None:
+            linked = target_map.get(ch.id)
+            if linked is not None:
+                return linked
+            if ch.target_channel_id in self._disabled_target_chat_ids:
+                return []
+            return None
+
         self._configs = {
-            ch.chat_id: self._row_to_config(ch, target_chat_ids=target_map.get(ch.id))
+            ch.chat_id: self._row_to_config(ch, target_chat_ids=active_targets_for(ch))
             for ch in channels
         }
         self._enabled_ids = {ch.chat_id for ch in channels if ch.enabled}
         self._source_by_id = {ch.id: ch.chat_id for ch in channels}
-        if targets is not None:
-            self._target_titles = {
-                t.chat_id: (t.title or (f"@{t.username}" if t.username else str(t.chat_id)))
-                for t in targets
-            }
+        self._target_titles = {
+            t.chat_id: (t.title or (f"@{t.username}" if t.username else str(t.chat_id)))
+            for t in targets
+        }
 
     async def load_from_db(self) -> None:
         async with self.session_factory() as session:
@@ -434,10 +464,37 @@ class ChannelService:
 
     async def delete_source(self, source_id: int) -> None:
         async with self.session_factory() as session:
-            repo = ChannelRepository(session)
-            deleted = await repo.delete(source_id)
-            if not deleted:
+            sources = list(
+                (
+                    await session.execute(
+                        select(SourceChannel).order_by(SourceChannel.id).with_for_update()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            source = next((row for row in sources if row.id == source_id), None)
+            if source is None:
                 raise ChannelServiceError("source channel not found", code="not_found")
+
+            has_legacy_fallback = bool(
+                self.settings.source_channels
+                or load_channels_config(self.settings.channels_config_path)
+            )
+            telegram_source_count = sum(1 for row in sources if not is_safew_chat_id(row.chat_id))
+            if (
+                not is_safew_chat_id(source.chat_id)
+                and telegram_source_count == 1
+                and has_legacy_fallback
+            ):
+                raise ChannelServiceError(
+                    "cannot delete the last Telegram source while SOURCE_CHANNELS or "
+                    "channels.yaml fallback is configured; disable it instead",
+                    code="conflict",
+                )
+
+            await session.delete(source)
+            await session.flush()
             await session.commit()
         await self.load_from_db()
 
@@ -460,7 +517,60 @@ class ChannelService:
             target = await repo.get_target_by_id(target_id)
             if target is None:
                 raise ChannelServiceError("target channel not found", code="not_found")
+
+            linked = list(
+                (
+                    await session.execute(
+                        select(SourceTargetLink).where(SourceTargetLink.target_id == target_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            affected_source_ids = {int(link.source_id) for link in linked}
+            legacy_source_ids = (
+                (
+                    await session.execute(
+                        select(SourceChannel.id).where(
+                            SourceChannel.target_channel_id == target.chat_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            affected_source_ids.update(int(source_id) for source_id in legacy_source_ids)
+
+            # Delete links explicitly so cleanup is reliable even on SQLite
+            # installations where foreign-key cascades are not enabled.
+            for link in linked:
+                await session.delete(link)
             await session.delete(target)
+            await session.flush()
+
+            # Keep the legacy primary-target column aligned with the remaining
+            # link set, or clear it when the deleted target was the last one.
+            for source_id in affected_source_ids:
+                remaining_chat_ids = list(
+                    (
+                        await session.execute(
+                            select(TargetChannel.chat_id)
+                            .join(
+                                SourceTargetLink,
+                                SourceTargetLink.target_id == TargetChannel.id,
+                            )
+                            .where(SourceTargetLink.source_id == source_id)
+                            .order_by(SourceTargetLink.id)
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                source = await repo.get_by_id(source_id)
+                if source is not None:
+                    source.target_channel_id = (
+                        int(remaining_chat_ids[0]) if remaining_chat_ids else None
+                    )
             await session.commit()
         await self.load_from_db()
 
@@ -653,8 +763,6 @@ class ChannelService:
 
     async def refresh_channels(self, client: Any) -> dict[str, Any]:
         """Re-read YAML config and rescan account dialogs for access_status."""
-        from app.config_files import load_channels_config
-
         yaml_count = 0
         path = self.settings.channels_config_path
         raw = load_channels_config(path)

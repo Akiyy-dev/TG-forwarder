@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 
 from app.config import Settings
 from app.entrypoints.common import install_shutdown_handlers
@@ -16,6 +17,18 @@ from app.logging import get_logger, setup_logging
 from app.messaging.redis_streams import RedisStreamBus
 
 logger = get_logger(__name__)
+
+
+def _safew_client_running(proc_root: Path = Path("/proc")) -> bool:
+    """Return whether the supervised SafeW desktop process is actually alive."""
+    for cmdline in proc_root.glob("[0-9]*/cmdline"):
+        try:
+            argv = cmdline.read_bytes().split(b"\0")
+        except (OSError, PermissionError):
+            continue
+        if argv and argv[0] == b"/opt/safew/SafeW":
+            return True
+    return False
 
 
 async def run() -> None:
@@ -51,7 +64,12 @@ async def run() -> None:
 
     logger.info("safew_receiver_starting")
     heartbeat = asyncio.create_task(
-        bus.heartbeat_loop("safew-receiver", stop_event), name="heartbeat"
+        bus.heartbeat_loop(
+            "safew-receiver",
+            stop_event,
+            health_probe=_safew_client_running,
+        ),
+        name="heartbeat",
     )
     try:
         await serve_notifications(handle, stop_event)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from app.api.app import create_api_app
 from app.auth.roles import Role
 from app.auth.service import AuthService
@@ -14,7 +15,7 @@ from app.listeners.safew_notifications import safew_chat_id
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.schemas.channel import PublishMode
 from app.schemas.message import MediaType, MessageStatus, NormalizedMessage
-from app.services.channel_service import ChannelService
+from app.services.channel_service import ChannelService, ChannelServiceError
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService, QueueItem
 from httpx import ASGITransport, AsyncClient
@@ -194,3 +195,235 @@ async def test_publish_mode_review_and_paused(
             )
         ).scalar_one()
         assert record2.status == MessageStatus.PENDING_PUBLISH.value
+
+
+async def test_disabled_targets_are_excluded_and_message_fails_without_retry(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+    publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
+    ctx = _ctx(settings_env, session_factory, publisher=publisher)
+
+    # An unregistered global target remains a supported legacy fallback.
+    assert ctx.channel_service.get_targets_for(-100909) == [settings_env.target_channel_id]
+
+    default_target = await ctx.channel_service.create_target(
+        {
+            "chat_id": settings_env.target_channel_id,
+            "title": "disabled default",
+            "enabled": False,
+        }
+    )
+    assert default_target.enabled is False
+    disabled = await ctx.channel_service.create_target(
+        {"chat_id": -100401, "title": "disabled", "enabled": False}
+    )
+    active = await ctx.channel_service.create_target(
+        {"chat_id": -100402, "title": "active", "enabled": True}
+    )
+    source = await ctx.channel_service.create_source(
+        {
+            "chat_id": -100403,
+            "title": "source",
+            "target_ids": [disabled.id, active.id],
+        }
+    )
+
+    assert ctx.channel_service.get_targets_for(source.chat_id) == [active.chat_id]
+
+    await ctx.channel_service.update_target(active.id, {"enabled": False})
+    configs = await ctx.channel_service.list_sources()
+    config = next(item for item in configs if item.id == source.id)
+    assert config.target_chat_ids == []
+    assert config.target_channel_id is None
+    assert ctx.channel_service.get_targets_for(source.chat_id) == []
+    assert ctx.channel_service.get_targets_for(-100909) == []
+
+    # A stale incoming target must not bypass the current disabled-target map.
+    message = NormalizedMessage(
+        source_chat_id=source.chat_id,
+        source_message_id=99,
+        text="must not publish",
+        media_type=MediaType.TEXT,
+        target_chat_id=active.chat_id,
+        target_chat_ids=[active.chat_id],
+    )
+    await ctx.message_service.process_durable(message)
+
+    async with session_factory() as session:
+        record = (
+            await session.execute(
+                select(ProcessedMessage).where(
+                    ProcessedMessage.source_chat_id == source.chat_id,
+                    ProcessedMessage.source_message_id == 99,
+                )
+            )
+        ).scalar_one()
+        assert record.status == MessageStatus.FAILED.value
+        assert record.target_chat_id is None
+        assert record.error_message == "no enabled target channel configured"
+        assert record.retry_count == 0
+    bot.send_message.assert_not_awaited()
+
+
+async def test_queued_message_from_disabled_source_fails_without_publish_or_retry(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+    publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
+    ctx = _ctx(settings_env, session_factory, publisher=publisher)
+    target = await ctx.channel_service.create_target(
+        {"chat_id": -100451, "title": "active target", "enabled": True}
+    )
+    source = await ctx.channel_service.create_source(
+        {
+            "chat_id": -100452,
+            "title": "source",
+            "publish_mode": PublishMode.AUTO.value,
+            "target_ids": [target.id],
+        }
+    )
+    message = NormalizedMessage(
+        source_chat_id=source.chat_id,
+        source_message_id=100,
+        text="queued before source was disabled",
+        media_type=MediaType.TEXT,
+        target_chat_id=target.chat_id,
+        target_chat_ids=[target.chat_id],
+    )
+    assert await ctx.message_service.enqueue(message) is True
+
+    await ctx.channel_service.update_source(source.id, {"enabled": False})
+    queued = ctx.message_service.queue.get_nowait()
+    assert queued is not None
+    await ctx.message_service.process_one(queued)
+
+    async with session_factory() as session:
+        record = (
+            await session.execute(
+                select(ProcessedMessage).where(
+                    ProcessedMessage.source_chat_id == source.chat_id,
+                    ProcessedMessage.source_message_id == message.source_message_id,
+                )
+            )
+        ).scalar_one()
+        assert record.status == MessageStatus.FAILED.value
+        assert record.target_chat_id is None
+        assert record.error_message == "source channel is currently disabled"
+        assert record.retry_count == 0
+    bot.send_message.assert_not_awaited()
+
+
+async def test_message_revalidates_target_after_processing_before_publish(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
+    publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
+    ctx = _ctx(settings_env, session_factory, publisher=publisher)
+    target = await ctx.channel_service.create_target(
+        {"chat_id": -100461, "title": "active target", "enabled": True}
+    )
+    source = await ctx.channel_service.create_source(
+        {
+            "chat_id": -100462,
+            "title": "source",
+            "publish_mode": PublishMode.AUTO.value,
+            "target_ids": [target.id],
+        }
+    )
+    message = NormalizedMessage(
+        source_chat_id=source.chat_id,
+        source_message_id=101,
+        text="target changes while processing",
+        media_type=MediaType.TEXT,
+        target_chat_id=target.chat_id,
+        target_chat_ids=[target.chat_id],
+    )
+    routing = AsyncMock(
+        side_effect=[
+            ([target.chat_id], None),
+            ([], "no enabled target channel configured"),
+        ]
+    )
+    ctx.message_service._refresh_routing = routing  # type: ignore[method-assign]
+
+    await ctx.message_service.process_durable(message)
+
+    assert routing.await_count == 2
+    bot.send_message.assert_not_awaited()
+    async with session_factory() as session:
+        record = (
+            await session.execute(
+                select(ProcessedMessage).where(
+                    ProcessedMessage.source_chat_id == source.chat_id,
+                    ProcessedMessage.source_message_id == message.source_message_id,
+                )
+            )
+        ).scalar_one()
+        assert record.status == MessageStatus.FAILED.value
+        assert record.error_message == "no enabled target channel configured"
+        assert record.retry_count == 0
+
+
+async def test_delete_target_recomputes_and_clears_legacy_primary(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = ChannelService(settings_env, session_factory)
+    first = await service.create_target({"chat_id": -100501, "title": "first", "enabled": True})
+    second = await service.create_target({"chat_id": -100502, "title": "second", "enabled": True})
+    source = await service.create_source(
+        {
+            "chat_id": -100503,
+            "title": "source",
+            "target_ids": [first.id, second.id],
+        }
+    )
+    assert source.target_channel_id == first.chat_id
+
+    await service.delete_target(first.id)
+    source = await service.get_source(source.id)
+    assert source.target_channel_id == second.chat_id
+    assert await service.get_linked_target_ids(source.id) == [second.id]
+    assert service.get_targets_for(source.chat_id) == [second.chat_id]
+
+    await service.delete_target(second.id)
+    source = await service.get_source(source.id)
+    assert source.target_channel_id is None
+    assert await service.get_linked_target_ids(source.id) == []
+    assert service.get_targets_for(source.chat_id) == []
+    assert service.get_target_for(source.chat_id) is None
+
+
+async def test_delete_last_telegram_source_with_legacy_fallback_requires_disable(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = ChannelService(settings_env, session_factory)
+    first = await service.create_source({"chat_id": -100601, "title": "first"})
+    last = await service.create_source({"chat_id": -100602, "title": "last"})
+    safew = await service.create_source(
+        {"chat_id": safew_chat_id("SafeW source"), "title": "SafeW source"}
+    )
+
+    await service.delete_source(first.id)
+
+    with pytest.raises(ChannelServiceError, match="disable it instead") as exc_info:
+        await service.delete_source(last.id)
+    assert exc_info.value.code == "conflict"
+    assert (await service.get_source(last.id)).enabled is True
+
+    await service.update_source(last.id, {"enabled": False})
+    assert (await service.get_source(last.id)).enabled is False
+
+    # SafeW sources do not act as Telegram tombstones and remain independently deletable.
+    await service.delete_source(safew.id)
+    with pytest.raises(ChannelServiceError) as deleted_exc:
+        await service.get_source(safew.id)
+    assert deleted_exc.value.code == "not_found"

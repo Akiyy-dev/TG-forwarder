@@ -36,11 +36,23 @@ class RedisStreamBus:
     async def close(self) -> None:
         await self.redis.aclose()
 
-    async def heartbeat_loop(self, role: str, stop_event: asyncio.Event) -> None:
+    async def heartbeat_loop(
+        self,
+        role: str,
+        stop_event: asyncio.Event,
+        *,
+        health_probe: Callable[[], bool] | None = None,
+    ) -> None:
         key = f"forwarder:heartbeat:{role}"
         while not stop_event.is_set():
             try:
-                await self.redis.set(key, "1", ex=15)
+                healthy = health_probe is None or health_probe()
+                if healthy:
+                    await self.redis.set(key, "1", ex=15)
+                else:
+                    # Do not leave a fresh role heartbeat behind when the process that
+                    # the container is supervising (for example, a GUI bridge) is down.
+                    await self.redis.delete(key)
             except Exception:
                 logger.exception("heartbeat_failed", role=role)
             with contextlib.suppress(TimeoutError):
@@ -52,6 +64,24 @@ class RedisStreamBus:
         except Exception:
             logger.warning("heartbeat_read_failed", role=role)
             return False
+
+    async def incoming_queue_size(self) -> int | None:
+        """Return the shared incoming stream length, or ``None`` when unavailable.
+
+        Consumed entries are deleted by the sender, so XLEN represents messages that
+        have not completed handling. Returning ``None`` keeps Redis failures distinct
+        from a genuinely empty queue.
+        """
+
+        try:
+            return int(await self.redis.xlen(self.settings.redis_incoming_stream))
+        except Exception:
+            logger.warning(
+                "incoming_queue_size_read_failed",
+                stream=self.settings.redis_incoming_stream,
+                exc_info=True,
+            )
+            return None
 
     async def publish_incoming(self, backend: SourceBackend, message: NormalizedMessage) -> str:
         event = IncomingMessageEvent.create(backend, message)
@@ -145,6 +175,10 @@ class RedisStreamBus:
                     except Exception:
                         logger.exception("stream_event_decode_failed", stream=stream)
                         await self.redis.xack(stream, self.settings.redis_sender_group, redis_id)
+                        # The payload can never be handled successfully. Remove it after
+                        # acknowledging so stream length continues to reflect actionable
+                        # incoming work instead of accumulating poison events forever.
+                        await self.redis.xdel(stream, redis_id)
                         continue
                     while not stop_event.is_set():
                         try:

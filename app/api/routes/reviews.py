@@ -91,6 +91,7 @@ def _publish_svc(ctx: AppContext) -> ReviewPublishService:
         _review_svc(ctx),
         ctx.publisher,
         ctx.media_service,
+        ctx.channel_service,
     )
 
 

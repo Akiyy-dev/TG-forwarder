@@ -32,8 +32,12 @@ export interface DashboardSummary {
     telegram_receiver_running: boolean
     safew_receiver_running: boolean
     sender_running: boolean
+    publisher_running: boolean
+    bot_polling_enabled: boolean
     bot_available: boolean
-    queue_size: number
+    queue_size: number | null
+    queue_size_available: boolean
+    queue_size_source: 'process_memory' | 'redis_stream'
   }
   counts: {
     pending_review: number

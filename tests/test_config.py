@@ -44,3 +44,29 @@ def test_safew_role_does_not_require_telegram_credentials(
         monkeypatch.delenv(key, raising=False)
     settings = Settings(app_role="safew-receiver", _env_file=None)
     assert settings.app_role == "safew-receiver"
+
+
+def test_telegram_receiver_can_start_without_legacy_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_API_ID", "1")
+    monkeypatch.setenv("TELEGRAM_API_HASH", "abc")
+    monkeypatch.delenv("SOURCE_CHANNELS", raising=False)
+
+    settings = Settings(app_role="telegram-receiver", _env_file=None)
+
+    assert settings.source_channels == []
+
+
+def test_sender_can_disable_bot_polling_without_admin_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "1:token")
+    monkeypatch.delenv("BOT_ADMIN_IDS", raising=False)
+    monkeypatch.setenv("BOT_POLLING_ENABLED", "false")
+    monkeypatch.setenv("TARGET_CHANNEL_ID", "-1001")
+
+    settings = Settings(app_role="sender", _env_file=None)
+
+    assert settings.bot_polling_enabled is False
+    assert settings.bot_admin_ids == []

@@ -37,6 +37,7 @@ class MessageRepository:
         status: str = MessageStatus.RECEIVED.value,
         target_chat_id: int | None = None,
         content_hash: str | None = None,
+        processing_result: dict[str, Any] | None = None,
     ) -> ProcessedMessage | None:
         """Insert a record; return None if unique constraint violated (already seen)."""
         record = ProcessedMessage(
@@ -46,6 +47,7 @@ class MessageRepository:
             status=status,
             target_chat_id=target_chat_id,
             content_hash=content_hash,
+            processing_result=processing_result,
         )
         try:
             async with self._session.begin_nested():
@@ -53,6 +55,16 @@ class MessageRepository:
                 await self._session.flush()
         except IntegrityError:
             return None
+        return record
+
+    async def update_payload(
+        self,
+        record: ProcessedMessage,
+        payload: dict[str, Any],
+    ) -> ProcessedMessage:
+        """Persist the normalized message snapshot without changing its status."""
+        record.processing_result = payload
+        await self._session.flush()
         return record
 
     async def update_status(

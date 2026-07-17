@@ -10,13 +10,19 @@ from app.auth.roles import Role
 from app.auth.service import AuthService
 from app.config import Settings
 from app.context import AppContext
-from app.database.models import ProcessedMessage
+from app.database.models import (
+    ProcessedMessage,
+    ReviewTask,
+    SourceChannel,
+    SourceTargetLink,
+    TargetChannel,
+)
 from app.listeners.safew_notifications import safew_chat_id
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.publish import ReviewPublishService
 from app.review.service import ReviewService
 from app.review.state_machine import ReviewActionType, ReviewStatus
-from app.schemas.message import MediaType, NormalizedMessage
+from app.schemas.message import MediaType, MessageStatus, NormalizedMessage
 from app.services.channel_service import ChannelService
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
@@ -50,13 +56,16 @@ async def _seed_task(
     *,
     source_chat_id: int = -1001,
     source_message_id: int = 7,
+    target_chat_ids: list[int] | None = None,
 ) -> int:
+    targets = target_chat_ids if target_chat_ids is not None else [-1002]
+    primary_target = targets[0] if targets else None
     async with session_factory() as session:
         processed = ProcessedMessage(
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
             status="pending_review",
-            target_chat_id=-1002,
+            target_chat_id=primary_target,
         )
         session.add(processed)
         await session.commit()
@@ -74,10 +83,30 @@ async def _seed_task(
                 source_message_id=source_message_id,
                 text="hello processed",
                 media_type=MediaType.TEXT,
-                target_chat_id=-1002,
+                target_chat_id=primary_target,
+                target_chat_ids=list(targets),
             ),
         )
     return task.id
+
+
+async def _approve_task(
+    session_factory: async_sessionmaker[AsyncSession],
+    task_id: int,
+) -> tuple[ReviewService, int]:
+    service = ReviewService(session_factory)
+    async with session_factory() as session:
+        task = await session.get(ReviewTask, task_id)
+        assert task is not None
+        revision = task.revision
+    approved = await service.transition(
+        task_id,
+        ReviewStatus.APPROVED,
+        user_id=1,
+        action=ReviewActionType.APPROVED,
+        expected_revision=revision,
+    )
+    return service, approved.revision
 
 
 async def test_review_edit_publish_api(
@@ -161,7 +190,13 @@ async def test_concurrent_publish_once(
         action=ReviewActionType.APPROVED,
         expected_revision=revision,
     )
-    pub = ReviewPublishService(session_factory, svc, publisher, ctx.media_service)
+    pub = ReviewPublishService(
+        session_factory,
+        svc,
+        publisher,
+        ctx.media_service,
+        ctx.channel_service,
+    )
 
     async def _pub() -> dict:
         return await pub.publish_task(task_id, expected_revision=approved.revision, user_id=1)
@@ -172,3 +207,224 @@ async def test_concurrent_publish_once(
     ]
     assert len(successes) <= 1
     assert bot.send_message.await_count <= 1 or any(r.get("already_published") for r in (r1, r2))
+
+
+async def test_review_publish_rejects_disabled_current_target(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    source_chat_id = -1003001
+    target_chat_id = -1003002
+    async with session_factory() as session:
+        source = SourceChannel(
+            chat_id=source_chat_id,
+            title="source",
+            enabled=True,
+            target_channel_id=target_chat_id,
+        )
+        target = TargetChannel(
+            chat_id=target_chat_id,
+            title="disabled target",
+            enabled=False,
+        )
+        session.add_all([source, target])
+        await session.flush()
+        session.add(SourceTargetLink(source_id=source.id, target_id=target.id))
+        await session.commit()
+
+    task_id = await _seed_task(
+        session_factory,
+        source_chat_id=source_chat_id,
+        source_message_id=301,
+        target_chat_ids=[target_chat_id],
+    )
+    review_service, revision = await _approve_task(session_factory, task_id)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+    publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
+    channel_service = ChannelService(settings_env, session_factory)
+    publish_service = ReviewPublishService(
+        session_factory,
+        review_service,
+        publisher,
+        MediaService(settings_env.download_dir, max_size_bytes=1024, ttl_minutes=1),
+        channel_service,
+    )
+
+    result = await publish_service.publish_task(
+        task_id,
+        expected_revision=revision,
+        user_id=1,
+    )
+
+    assert result["status"] == ReviewStatus.FAILED.value
+    assert "currently enabled target" in result["error"]
+    bot.send_message.assert_not_awaited()
+    async with session_factory() as session:
+        task = await session.get(ReviewTask, task_id)
+        assert task is not None
+        processed = await session.get(ProcessedMessage, task.processed_message_id)
+        assert processed is not None
+        assert task.status == ReviewStatus.FAILED.value
+        assert task.error_message == result["error"]
+        assert processed.status == "failed"
+        assert processed.error_message == result["error"]
+
+
+async def test_review_publish_filters_deleted_snapshot_target(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    source_chat_id = -1004001
+    active_target_id = -1004002
+    deleted_target_id = -1004003
+    async with session_factory() as session:
+        source = SourceChannel(
+            chat_id=source_chat_id,
+            title="source",
+            enabled=True,
+            target_channel_id=active_target_id,
+        )
+        active = TargetChannel(
+            chat_id=active_target_id,
+            title="active target",
+            enabled=True,
+        )
+        session.add_all([source, active])
+        await session.flush()
+        session.add(SourceTargetLink(source_id=source.id, target_id=active.id))
+        await session.commit()
+
+    task_id = await _seed_task(
+        session_factory,
+        source_chat_id=source_chat_id,
+        source_message_id=401,
+        target_chat_ids=[active_target_id, deleted_target_id],
+    )
+    review_service, revision = await _approve_task(session_factory, task_id)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=44))
+    publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
+    publish_service = ReviewPublishService(
+        session_factory,
+        review_service,
+        publisher,
+        MediaService(settings_env.download_dir, max_size_bytes=1024, ttl_minutes=1),
+        ChannelService(settings_env, session_factory),
+    )
+
+    result = await publish_service.publish_task(
+        task_id,
+        expected_revision=revision,
+        user_id=1,
+    )
+
+    assert result["status"] == ReviewStatus.PUBLISHED.value
+    assert result["per_target"] == {str(active_target_id): {"ok": True, "message_ids": [44]}}
+    bot.send_message.assert_awaited_once_with(active_target_id, "hello processed")
+
+
+async def test_review_publish_rejects_disabled_current_source(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    source_chat_id = -1005001
+    target_chat_id = -1005002
+    async with session_factory() as session:
+        source = SourceChannel(
+            chat_id=source_chat_id,
+            title="disabled source",
+            enabled=False,
+            target_channel_id=target_chat_id,
+        )
+        target = TargetChannel(chat_id=target_chat_id, title="active target", enabled=True)
+        session.add_all([source, target])
+        await session.flush()
+        session.add(SourceTargetLink(source_id=source.id, target_id=target.id))
+        await session.commit()
+
+    task_id = await _seed_task(
+        session_factory,
+        source_chat_id=source_chat_id,
+        source_message_id=501,
+        target_chat_ids=[target_chat_id],
+    )
+    review_service, revision = await _approve_task(session_factory, task_id)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+    publish_service = ReviewPublishService(
+        session_factory,
+        review_service,
+        TelegramPublisher(bot, max_retries=1, base_delay=0.01),
+        MediaService(settings_env.download_dir, max_size_bytes=1024, ttl_minutes=1),
+        ChannelService(settings_env, session_factory),
+    )
+
+    result = await publish_service.publish_task(
+        task_id,
+        expected_revision=revision,
+        user_id=1,
+    )
+
+    assert result == {
+        "status": ReviewStatus.FAILED.value,
+        "error": "review source channel is currently disabled",
+    }
+    bot.send_message.assert_not_awaited()
+    async with session_factory() as session:
+        task = await session.get(ReviewTask, task_id)
+        assert task is not None
+        processed = await session.get(ProcessedMessage, task.processed_message_id)
+        assert processed is not None
+        assert task.status == ReviewStatus.FAILED.value
+        assert processed.status == MessageStatus.FAILED.value
+        assert processed.retry_count == 0
+
+
+async def test_review_publish_revalidates_target_immediately_before_send(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target_chat_id = -1006002
+    task_id = await _seed_task(
+        session_factory,
+        source_chat_id=-1006001,
+        source_message_id=601,
+        target_chat_ids=[target_chat_id],
+    )
+    review_service, revision = await _approve_task(session_factory, task_id)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
+    publish_service = ReviewPublishService(
+        session_factory,
+        review_service,
+        TelegramPublisher(bot, max_retries=1, base_delay=0.01),
+        MediaService(settings_env.download_dir, max_size_bytes=1024, ttl_minutes=1),
+        ChannelService(settings_env, session_factory),
+    )
+    current_targets = AsyncMock(
+        side_effect=[
+            [target_chat_id],  # initial validation
+            [target_chat_id],  # validation after media recovery
+            [],  # target disabled immediately before its send
+        ]
+    )
+    publish_service._current_targets = current_targets  # type: ignore[method-assign]
+
+    result = await publish_service.publish_task(
+        task_id,
+        expected_revision=revision,
+        user_id=1,
+    )
+
+    assert result["status"] == ReviewStatus.FAILED.value
+    assert "no longer enabled and bound" in result["error"]
+    assert current_targets.await_count == 3
+    bot.send_message.assert_not_awaited()
+    async with session_factory() as session:
+        task = await session.get(ReviewTask, task_id)
+        assert task is not None
+        processed = await session.get(ProcessedMessage, task.processed_message_id)
+        assert processed is not None
+        assert processed.status == MessageStatus.FAILED.value
+        assert processed.retry_count == 0

@@ -16,6 +16,7 @@ from app.api.dependencies import SuperAdminUser, ViewerUser, get_ctx
 from app.api.errors import AppError
 from app.api.pagination import PageParams, build_page
 from app.api.schemas import Envelope
+from app.api.status import queue_status
 from app.context import AppContext
 from app.database.models import ProcessingLog, ReviewAction, ReviewTask, RuleExecutionLog
 from app.review.state_machine import ReviewStatus
@@ -32,6 +33,15 @@ async def system_status(
     stats = await ctx.message_service.stats()
     bus = ctx.command_bus
     distributed = bus is not None
+    queue = await queue_status(ctx)
+    if distributed:
+        recent_errors = await ctx.message_service.recent_errors()
+        last_error_value = recent_errors[0].get("error") if recent_errors else None
+        last_error = str(last_error_value) if last_error_value is not None else None
+        last_error_source = "database"
+    else:
+        last_error = ctx.message_service.last_error
+        last_error_source = "process_memory"
     telegram_receiver_running = ctx.listener is not None
     safew_receiver_running = False
     sender_running = ctx.bot is not None or getattr(ctx.publisher, "bot", None) is not None
@@ -41,18 +51,25 @@ async def system_status(
             bus.role_alive("safew-receiver"),
             bus.role_alive("sender"),
         )
+    publisher_running = sender_running
+    bot_polling_enabled = ctx.settings.bot_polling_enabled
     return Envelope(
         data={
             "started_at": ctx.started_at.isoformat(),
             "distributed": distributed,
             "publishing_paused": paused,
-            "queue_size": ctx.message_service.queue_size,
-            "last_error": ctx.message_service.last_error,
+            **queue,
+            "last_error": last_error,
+            "last_error_source": last_error_source,
             "listener_running": telegram_receiver_running or safew_receiver_running,
             "telegram_receiver_running": telegram_receiver_running,
             "safew_receiver_running": safew_receiver_running,
             "sender_running": sender_running,
-            "bot_available": sender_running,
+            "publisher_running": publisher_running,
+            "bot_polling_enabled": bot_polling_enabled,
+            # Compatibility for older Web clients. This describes whether admin-command
+            # polling is configured on a live sender, not Telegram publishing health.
+            "bot_available": sender_running and bot_polling_enabled,
             "message_stats": stats,
         }
     )
@@ -105,55 +122,60 @@ async def system_recover(
     return Envelope(data={"requeued": requeued})
 
 
+async def _status_event_stream(request: Request, ctx: AppContext) -> AsyncIterator[str]:
+    last_pending: int | None = None
+    last_queue: int | None = None
+    last_paused: bool | None = None
+    while True:
+        if await request.is_disconnected():
+            break
+        async with ctx.session_factory() as session:
+            pending = int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(ReviewTask)
+                        .where(
+                            ReviewTask.status.in_(
+                                [
+                                    ReviewStatus.PENDING.value,
+                                    ReviewStatus.EDITING.value,
+                                    ReviewStatus.APPROVED.value,
+                                    ReviewStatus.FAILED.value,
+                                ]
+                            )
+                        )
+                    )
+                ).scalar_one()
+            )
+        queue = await queue_status(ctx)
+        queue_size = queue["queue_size"]
+        # Compose roles do not share memory, so always refresh the shared pause state.
+        paused = await ctx.message_service.refresh_paused()
+        if pending != last_pending or queue_size != last_queue or paused != last_paused:
+            payload = {
+                "ts": datetime.now(UTC).isoformat(),
+                "pending_review": pending,
+                **queue,
+                "publishing_paused": paused,
+            }
+            yield f"event: status\ndata: {json.dumps(payload)}\n\n"
+            last_pending = pending
+            last_queue = queue_size
+            last_paused = paused
+        else:
+            yield ": keepalive\n\n"
+        await asyncio.sleep(5)
+
+
 @router.get("/events/stream")
 async def events_stream(
     request: Request,
     _user: ViewerUser,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> StreamingResponse:
-    async def generate() -> AsyncIterator[str]:
-        last_pending: int | None = None
-        last_queue: int | None = None
-        while True:
-            if await request.is_disconnected():
-                break
-            async with ctx.session_factory() as session:
-                pending = int(
-                    (
-                        await session.execute(
-                            select(func.count())
-                            .select_from(ReviewTask)
-                            .where(
-                                ReviewTask.status.in_(
-                                    [
-                                        ReviewStatus.PENDING.value,
-                                        ReviewStatus.EDITING.value,
-                                        ReviewStatus.APPROVED.value,
-                                        ReviewStatus.FAILED.value,
-                                    ]
-                                )
-                            )
-                        )
-                    ).scalar_one()
-                )
-            queue_size = ctx.message_service.queue_size
-            paused = ctx.message_service.paused
-            if pending != last_pending or queue_size != last_queue:
-                payload = {
-                    "ts": datetime.now(UTC).isoformat(),
-                    "pending_review": pending,
-                    "queue_size": queue_size,
-                    "publishing_paused": paused,
-                }
-                yield f"event: status\ndata: {json.dumps(payload)}\n\n"
-                last_pending = pending
-                last_queue = queue_size
-            else:
-                yield ": keepalive\n\n"
-            await asyncio.sleep(5)
-
     return StreamingResponse(
-        generate(),
+        _status_event_stream(request, ctx),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

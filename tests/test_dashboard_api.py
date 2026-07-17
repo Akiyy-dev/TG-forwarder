@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from app.api.app import create_api_app
 from app.auth.roles import Role
@@ -37,6 +37,10 @@ async def test_dashboard_summary(
         publisher=pub,
         auth_service=auth,
     )
+    bus = MagicMock()
+    bus.role_alive = AsyncMock(return_value=True)
+    bus.incoming_queue_size = AsyncMock(return_value=9)
+    ctx.command_bus = bus
     await auth.create_user(username="viewer", password="password123", role=Role.VIEWER)
     async with session_factory() as session:
         processed = ProcessedMessage(
@@ -84,5 +88,12 @@ async def test_dashboard_summary(
         assert "service" in data
         assert "counts" in data
         assert "pending_review" in data["counts"]
+        assert data["service"]["sender_running"] is True
+        assert data["service"]["publisher_running"] is True
+        assert data["service"]["bot_polling_enabled"] is True
+        assert data["service"]["bot_available"] is True
+        assert data["service"]["queue_size"] == 9
+        assert data["service"]["queue_size_available"] is True
+        assert data["service"]["queue_size_source"] == "redis_stream"
         assert data["recent_reviews"][0]["source_backend"] == "safew"
         assert data["recent_errors"][0]["source_backend"] == "safew"

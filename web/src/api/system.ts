@@ -4,9 +4,15 @@ import type { PageResult } from './types'
 export async function fetchSystemStatus(): Promise<{
   started_at: string
   publishing_paused: boolean
-  queue_size: number
+  queue_size: number | null
+  queue_size_available: boolean
+  queue_size_source: 'process_memory' | 'redis_stream'
   last_error: string | null
+  last_error_source: 'process_memory' | 'database'
   listener_running: boolean
+  sender_running: boolean
+  publisher_running: boolean
+  bot_polling_enabled: boolean
   bot_available: boolean
   message_stats: Record<string, number>
 }> {

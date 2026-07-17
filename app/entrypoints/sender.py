@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from aiogram import Bot, Dispatcher
+
 from app.bot.dispatcher import create_bot, create_dispatcher
 from app.config import Settings
 from app.config_files import load_channels_config
@@ -24,6 +26,66 @@ from app.services.rules_service import RulesService
 from app.utils.files import ensure_dir
 
 logger = get_logger(__name__)
+
+
+async def _accept_or_register_source(
+    event: IncomingMessageEvent,
+    settings: Settings,
+    channel_service: ChannelService,
+) -> bool:
+    """Accept known sources and narrowly register trusted compatibility events."""
+
+    message = event.message
+    if message.source_chat_id in channel_service.configured_chat_ids:
+        return True
+
+    if event.backend == "safew":
+        if not settings.safew_auto_register_sources:
+            logger.warning("unknown_safew_source_ignored", source_chat_id=message.source_chat_id)
+            return False
+    else:
+        source_origin = message.raw_metadata.get("source_registry_origin")
+        if source_origin != "legacy_config":
+            logger.warning(
+                "unknown_telegram_source_ignored",
+                source_chat_id=message.source_chat_id,
+                source_registry_origin=source_origin,
+            )
+            return False
+
+    await channel_service.sync_from_config_rows(
+        [
+            {
+                "chat_id": message.source_chat_id,
+                "username": message.source_chat_username,
+                "title": message.source_chat_title,
+                "enabled": True,
+                "publish_mode": "review",
+                "target_chat_id": settings.target_channel_id,
+            }
+        ]
+    )
+    return True
+
+
+def _start_bot_polling(
+    settings: Settings,
+    *,
+    bot: Bot,
+    message_service: MessageService,
+    channel_service: ChannelService,
+) -> tuple[Dispatcher | None, asyncio.Task[Any] | None]:
+    if not settings.bot_polling_enabled:
+        logger.info("bot_polling_disabled")
+        return None, None
+
+    dispatcher = create_dispatcher(
+        settings,
+        message_service=message_service,
+        channel_service=channel_service,
+    )
+    task = asyncio.create_task(dispatcher.start_polling(bot), name="bot_polling")
+    return dispatcher, task
 
 
 async def run() -> None:
@@ -70,16 +132,12 @@ async def run() -> None:
         review_service,
         publisher,
         media_service,
+        channel_service,
     )
     auto_approve = ReviewAutoApproveService(
         session_factory,
         publish_service,
         is_paused=message_service.refresh_paused,
-    )
-    dispatcher = create_dispatcher(
-        settings,
-        message_service=message_service,
-        channel_service=channel_service,
     )
     bus = RedisStreamBus(settings)
     await bus.ping()
@@ -96,25 +154,8 @@ async def run() -> None:
         await message_service.refresh_paused()
         message = event.message
         message.raw_metadata["source_backend"] = event.backend
-        if message.source_chat_id not in channel_service.configured_chat_ids:
-            if event.backend != "safew" or settings.safew_auto_register_sources:
-                await channel_service.sync_from_config_rows(
-                    [
-                        {
-                            "chat_id": message.source_chat_id,
-                            "username": message.source_chat_username,
-                            "title": message.source_chat_title,
-                            "enabled": True,
-                            "publish_mode": "review",
-                            "target_chat_id": settings.target_channel_id,
-                        }
-                    ]
-                )
-            else:
-                logger.warning(
-                    "unknown_safew_source_ignored", source_chat_id=message.source_chat_id
-                )
-                return
+        if not await _accept_or_register_source(event, settings, channel_service):
+            return
         if not channel_service.is_enabled(message.source_chat_id):
             logger.info("disabled_source_ignored", source_chat_id=message.source_chat_id)
             return
@@ -168,21 +209,29 @@ async def run() -> None:
     await message_service.start_workers()
     await message_service.recover_pending()
     auto_approve.start()
+    dispatcher, polling_task = _start_bot_polling(
+        settings,
+        bot=bot,
+        message_service=message_service,
+        channel_service=channel_service,
+    )
     tasks: set[asyncio.Task[Any]] = {
         asyncio.create_task(bus.consume_incoming(handle_incoming, stop_event), name="incoming"),
         asyncio.create_task(bus.consume_commands(handle_command, stop_event), name="commands"),
-        asyncio.create_task(dispatcher.start_polling(bot), name="bot_polling"),
         asyncio.create_task(bus.heartbeat_loop("sender", stop_event), name="heartbeat"),
         asyncio.create_task(stop_event.wait(), name="shutdown"),
     }
-    logger.info("sender_started")
+    if polling_task is not None:
+        tasks.add(polling_task)
+    logger.info("sender_started", bot_polling_enabled=settings.bot_polling_enabled)
     try:
         _done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
         stop_event.set()
         await auto_approve.stop()
         await message_service.stop_workers()
-        await dispatcher.stop_polling()
+        if dispatcher is not None and polling_task is not None and not polling_task.done():
+            await dispatcher.stop_polling()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

@@ -75,7 +75,7 @@ export function SystemPage() {
         </Alert>
       )}
 
-      <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }}>
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }}>
         <Card withBorder>
           <Text size="xs" c="dimmed">
             队列
@@ -94,11 +94,28 @@ export function SystemPage() {
         </Card>
         <Card withBorder>
           <Text size="xs" c="dimmed">
-            监听器 / Bot
+            消息接收端
+          </Text>
+          <Text fw={700}>{data ? (data.listener_running ? '运行中' : '离线') : '-'}</Text>
+        </Card>
+        <Card withBorder>
+          <Text size="xs" c="dimmed">
+            Telegram 发布端
+          </Text>
+          <Text fw={700}>{data ? (data.publisher_running ? '运行中' : '离线') : '-'}</Text>
+        </Card>
+        <Card withBorder>
+          <Text size="xs" c="dimmed">
+            Bot 管理命令
           </Text>
           <Text fw={700}>
-            {data?.listener_running ? '监听器正常' : '监听器离线'} ·{' '}
-            {data?.bot_available ? 'Bot 正常' : 'Bot 离线'}
+            {data
+              ? !data.bot_polling_enabled
+                ? '已关闭'
+                : data.sender_running
+                  ? '已启用'
+                  : '离线'
+              : '-'}
           </Text>
         </Card>
         <Card withBorder>

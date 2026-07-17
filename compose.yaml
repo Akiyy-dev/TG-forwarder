@@ -74,6 +74,8 @@ services:
       WEB_ADMIN_USERNAME: ${WEB_ADMIN_USERNAME:-admin}
       WEB_ADMIN_PASSWORD_HASH: ${WEB_ADMIN_PASSWORD_HASH:-}
       WEB_SECURE_COOKIES: ${WEB_SECURE_COOKIES:-false}
+      BOT_POLLING_ENABLED: ${BOT_POLLING_ENABLED:-true}
+      SOURCE_CHANNELS: ${SOURCE_CHANNELS:-}
     ports:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
     healthcheck:
@@ -95,7 +97,8 @@ services:
       <<: *app-environment
       APP_ROLE: sender
       BOT_TOKEN: ${BOT_TOKEN}
-      BOT_ADMIN_IDS: ${BOT_ADMIN_IDS}
+      BOT_ADMIN_IDS: ${BOT_ADMIN_IDS:-}
+      BOT_POLLING_ENABLED: ${BOT_POLLING_ENABLED:-true}
       SAFEW_AUTO_REGISTER_SOURCES: ${SAFEW_AUTO_REGISTER_SOURCES:-true}
     volumes:
       - media-data:/data/downloads
@@ -118,6 +121,8 @@ services:
       - telegram-session:/data/sessions
       - ./config:/app/config:ro
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -146,6 +151,16 @@ services:
       redis:
         condition: service_healthy
     shm_size: 512mb
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pgrep -f '^/opt/safew/SafeW( |$)' >/dev/null && pgrep -f 'python -m app.entrypoints.safew_receiver' >/dev/null",
+        ]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 60s
 
 volumes:
   postgres-data:

@@ -74,6 +74,7 @@ class Settings(BaseSettings):
 
     bot_token: str = ""
     bot_admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    bot_polling_enabled: bool = True
     target_channel_id: int = 0
 
     source_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
@@ -190,7 +191,7 @@ class Settings(BaseSettings):
             msg = "TELEGRAM_API_ID and TELEGRAM_API_HASH are required for telegram-receiver"
             raise ValueError(msg)
         if (
-            self.app_role in {"all", "telegram-receiver"}
+            self.app_role == "all"
             and not self.source_channels
             and not load_channels_config(self.channels_config_path)
         ):
@@ -205,7 +206,11 @@ class Settings(BaseSettings):
         if self.app_role in {"all", "sender"} and self.target_channel_id == 0:
             msg = "TARGET_CHANNEL_ID is required for sender"
             raise ValueError(msg)
-        if self.app_role in {"all", "sender"} and not self.bot_admin_ids:
+        if (
+            self.app_role in {"all", "sender"}
+            and self.bot_polling_enabled
+            and not self.bot_admin_ids
+        ):
             msg = "BOT_ADMIN_IDS must contain at least one Telegram user id"
             raise ValueError(msg)
         if self.max_download_size_mb <= 0:
@@ -231,7 +236,8 @@ class Settings(BaseSettings):
             f"Settings(app_env={self.app_env!r}, app_role={self.app_role!r}, "
             f"log_level={self.log_level!r}, "
             f"telegram_api_id=***, telegram_api_hash=***, telegram_phone=***, "
-            f"bot_token=***, target_channel_id={self.target_channel_id}, "
+            f"bot_token=***, bot_polling_enabled={self.bot_polling_enabled}, "
+            f"target_channel_id={self.target_channel_id}, "
             f"source_channels={self.source_channels!r}, web_enabled={self.web_enabled})"
         )
 

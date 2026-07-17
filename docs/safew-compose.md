@@ -56,7 +56,9 @@ chmod 600 .env
 - `POSTGRES_PASSWORD`、`WEB_SECRET_KEY`、`NOVNC_PASSWORD`；数据库密码会嵌入连接
   URL，建议只使用足够长的字母和数字组合；
 - `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`；
-- `BOT_TOKEN`、`BOT_ADMIN_IDS`、`TARGET_CHANNEL_ID`；
+- `BOT_TOKEN`、`TARGET_CHANNEL_ID`；如需 Bot 管理命令，再填写 `BOT_ADMIN_IDS` 并保持
+  `BOT_POLLING_ENABLED=true`。同一 Bot Token 被其他程序监听时应设为 `false`，发布功能
+  不受影响；
 - `SOURCE_CHANNELS`，或在 `config/channels.yaml` 中填写 Telegram 来源。
 
 先检查配置并构建镜像：
@@ -81,6 +83,12 @@ docker compose run --rm telegram-receiver python -m scripts.create_session
 ```
 
 验证码和两步验证密码只在交互提示中输入，不要写入 `.env`。Session 会保存在 `telegram-session` 卷。
+
+Telegram 来源以 Web/PostgreSQL 中的启用状态为准；修改后接收端会在约 5 秒内正常退出，
+并由 Compose 的 `restart: unless-stopped` 自动拉起，以重新加载 Telethon 过滤器。若所有
+Telegram 来源均关闭，接收端会保持空闲且不会退化为监听账号内全部频道。
+仍使用 `SOURCE_CHANNELS` 或 `config/channels.yaml` 作为首次导入来源时，Web 会阻止删除
+最后一个 Telegram 来源；请将它关闭，或先移除旧式配置后再删除。
 
 启动服务：
 

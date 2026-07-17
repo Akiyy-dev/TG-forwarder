@@ -78,7 +78,9 @@ Windows 激活虚拟环境使用 `.venv\Scripts\activate`。
 | --- | --- |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | [my.telegram.org](https://my.telegram.org) 应用凭据 |
 | `SOURCE_CHANNELS` | Telegram 来源用户名或频道 ID，逗号分隔 |
-| `BOT_TOKEN` / `BOT_ADMIN_IDS` | 发布 Bot 及管理员 |
+| `BOT_TOKEN` | 发布到 Telegram 目标频道的 Bot |
+| `BOT_ADMIN_IDS` | 可使用 Bot 管理命令的 Telegram 用户 ID |
+| `BOT_POLLING_ENABLED` | 是否启用 Bot 管理命令轮询；设为 `false` 仍可正常发布 |
 | `TARGET_CHANNEL_ID` | Telegram 目标频道 ID |
 | `SAFEW_ALLOWED_CHATS` | 允许监听的 SafeW 会话标题，留空表示全部 |
 
@@ -89,6 +91,14 @@ Windows 激活虚拟环境使用 `.venv\Scripts\activate`。
 
 Bot 管理命令包括 `/status`、`/sources`、`/stats`、`/retry_failed`、
 `/pause` 和 `/resume`。Web 面板提供来源、规则、审核队列和运行状态管理。
+如果同一个 Bot Token 还被其他程序监听，请设置 `BOT_POLLING_ENABLED=false`，避免
+Telegram `getUpdates` 冲突；这只会关闭上述管理命令，不影响消息发布。
+
+Compose 模式下，Web 对 Telegram 来源的启用或停用会在约 5 秒内由接收端自动加载；
+接收端会短暂重启以更新 Telethon 的频道过滤器。直接运行独立接收端时没有 Compose
+自动拉起能力，应由 systemd 等进程管理器托管，或在来源变更后手动重启。
+如果 `.env`/`channels.yaml` 仍保留旧式来源配置，最后一个 Telegram 来源应在 Web 中
+关闭而不是删除；这是为了防止旧配置回退把已删除来源重新加入。
 
 ```bash
 # 查询当前 Telegram 账号可访问的频道

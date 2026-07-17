@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 export interface StatusEvent {
   ts: string
   pending_review: number
-  queue_size: number
+  queue_size: number | null
+  queue_size_available: boolean
+  queue_size_source: 'process_memory' | 'redis_stream'
   publishing_paused: boolean
 }
 

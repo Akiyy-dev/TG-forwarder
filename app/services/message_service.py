@@ -13,6 +13,7 @@ from app.config import Settings
 from app.database.repositories.message_repo import MessageRepository
 from app.database.repositories.settings_repo import SettingsRepository
 from app.logging import get_logger
+from app.messaging.models import message_from_dict, message_to_dict
 from app.processors.deduplication import DeduplicationProcessor
 from app.processors.pipeline import ProcessorPipeline, build_default_pipeline
 from app.publishers.telegram_publisher import TelegramPublisher
@@ -31,6 +32,10 @@ from app.services.retry_service import exception_summary
 from app.source_backends import source_backend_for_chat_id
 
 logger = get_logger(__name__)
+
+INVALID_STORED_PAYLOAD = "stored normalized payload is missing or invalid; recovery skipped"
+NO_ENABLED_TARGET = "no enabled target channel configured"
+SOURCE_DISABLED = "source channel is currently disabled"
 
 
 @dataclass
@@ -94,6 +99,50 @@ class MessageService:
     def queue_size(self) -> int:
         return self.queue.qsize()
 
+    def _resolve_targets(self, message: NormalizedMessage) -> list[int]:
+        """Resolve current targets without reviving disabled channel assignments."""
+        if message.source_chat_id in self.channel_service.configured_chat_ids:
+            return self.channel_service.get_targets_for(message.source_chat_id)
+
+        incoming = list(message.target_chat_ids)
+        if not incoming and message.target_chat_id is not None:
+            incoming = [message.target_chat_id]
+        if incoming:
+            return [
+                int(chat_id)
+                for chat_id in incoming
+                if self.channel_service.is_target_available(int(chat_id))
+            ]
+        return self.channel_service.get_targets_for(message.source_chat_id)
+
+    def _routing_block_reason(
+        self,
+        source_chat_id: int,
+        targets: list[int],
+    ) -> str | None:
+        if (
+            source_chat_id in self.channel_service.configured_chat_ids
+            and not self.channel_service.is_enabled(source_chat_id)
+        ):
+            return SOURCE_DISABLED
+        if not targets:
+            return NO_ENABLED_TARGET
+        return None
+
+    async def _refresh_routing(
+        self,
+        message: NormalizedMessage,
+    ) -> tuple[list[int], str | None]:
+        """Reload routing and return only destinations that are still publishable."""
+        await self.channel_service.load_from_db()
+        targets = self._resolve_targets(message)
+        reason = self._routing_block_reason(message.source_chat_id, targets)
+        if reason == SOURCE_DISABLED:
+            targets = []
+        message.target_chat_ids = list(targets)
+        message.target_chat_id = targets[0] if targets else None
+        return targets, reason
+
     async def refresh_paused(self) -> bool:
         async with self.session_factory() as session:
             repo = SettingsRepository(session)
@@ -134,11 +183,10 @@ class MessageService:
         raw_messages: list[Any] | None = None,
     ) -> bool:
         """Fast path from listener: register + enqueue. Returns False if duplicate."""
-        targets = self.channel_service.get_targets_for(message.source_chat_id)
-        if not message.target_chat_ids:
-            message.target_chat_ids = list(targets)
-        if message.target_chat_id is None:
-            message.target_chat_id = targets[0] if targets else self.settings.target_channel_id
+        targets = self._resolve_targets(message)
+        message.target_chat_ids = list(targets)
+        message.target_chat_id = targets[0] if targets else None
+        payload = message_to_dict(message)
 
         # Idempotency: create rows for primary and album parts
         ids_to_register = message.album_message_ids or [message.source_message_id]
@@ -158,6 +206,7 @@ class MessageService:
                     grouped_id=message.grouped_id,
                     status=status,
                     target_chat_id=message.target_chat_id,
+                    processing_result=(payload if mid == message.source_message_id else None),
                 )
                 if record is not None:
                     created_any = True
@@ -180,6 +229,8 @@ class MessageService:
                             status=existing.status,
                         )
                         return False
+                    if existing is not None:
+                        await repo.update_payload(existing, payload)
             await session.commit()
 
         if not created_any and primary is None:
@@ -226,13 +277,11 @@ class MessageService:
 
     async def process_one(self, item: QueueItem) -> None:
         message = item.message
-        targets = message.target_chat_ids or self.channel_service.get_targets_for(
-            message.source_chat_id
-        )
-        message.target_chat_ids = list(targets)
-        if message.target_chat_id is None:
-            message.target_chat_id = targets[0] if targets else self.settings.target_channel_id
-        target = message.target_chat_id
+        # Incoming stream events and locally queued retries can outlive the
+        # sender's routing cache. Always consult the database before deciding
+        # whether this source is still enabled or where it may publish.
+        targets, routing_block = await self._refresh_routing(message)
+        payload = message_to_dict(message)
 
         async with self.session_factory() as session:
             repo = MessageRepository(session)
@@ -243,7 +292,8 @@ class MessageService:
                     source_message_id=message.source_message_id,
                     grouped_id=message.grouped_id,
                     status=MessageStatus.RECEIVED.value,
-                    target_chat_id=target,
+                    target_chat_id=message.target_chat_id,
+                    processing_result=payload,
                 )
             if record is None:
                 await session.commit()
@@ -251,9 +301,46 @@ class MessageService:
             if record.status == MessageStatus.PUBLISHED.value and record.target_message_ids:
                 await session.commit()
                 return
-            await repo.update_status(record, MessageStatus.PROCESSING.value)
+            if routing_block is not None:
+                reason = routing_block
+                record.target_chat_id = None
+                await repo.update_status(
+                    record,
+                    MessageStatus.FAILED.value,
+                    error_message=reason,
+                    processing_result=payload,
+                )
+                await session.commit()
+                self._last_error = (
+                    "SourceDisabled" if reason == SOURCE_DISABLED else "NoEnabledTarget"
+                )
+                logger.error(
+                    "message_routing_blocked",
+                    source_chat_id=message.source_chat_id,
+                    source_message_id=message.source_message_id,
+                    reason=reason,
+                )
+                self.history.write(
+                    source_chat_id=message.source_chat_id,
+                    source_message_id=message.source_message_id,
+                    payload={
+                        "status": MessageStatus.FAILED.value,
+                        "text": message.text,
+                        "reason": reason,
+                        "media_type": message.media_type.value,
+                        "target_chat_ids": [],
+                    },
+                )
+                return
+            await repo.update_status(
+                record,
+                MessageStatus.PROCESSING.value,
+                processing_result=payload,
+            )
             await session.commit()
             record_id = record.id
+
+        target = targets[0]
 
         original_text = message.text or ""
 
@@ -293,12 +380,15 @@ class MessageService:
                 )
 
             if result.action == ProcessAction.DROP:
+                filtered_message = result.message or message
+                filtered_payload = message_to_dict(filtered_message)
+                filtered_payload["action"] = result.action.value
                 await repo.update_status(
                     record,
                     MessageStatus.FILTERED.value,
                     skip_reason=result.reason,
                     content_hash=content_hash,
-                    processing_result={"action": result.action.value},
+                    processing_result=filtered_payload,
                 )
                 await session.commit()
                 self.media_service.cleanup_message_files(message)
@@ -315,11 +405,13 @@ class MessageService:
                 return
 
             if result.action == ProcessAction.FAIL:
+                failed_message = result.message or message
                 await repo.update_status(
                     record,
                     MessageStatus.FAILED.value,
                     error_message=result.reason,
                     content_hash=content_hash,
+                    processing_result=message_to_dict(failed_message),
                 )
                 await session.commit()
                 return
@@ -334,19 +426,22 @@ class MessageService:
                     if result.action == ProcessAction.REVIEW
                     else "channel_publish_mode_review"
                 )
+                processed_msg = result.message or message
+                review_payload = message_to_dict(processed_msg)
+                review_payload.update(
+                    {
+                        "action": ProcessAction.REVIEW.value,
+                        "publish_mode": publish_mode.value,
+                    }
+                )
                 await repo.update_status(
                     record,
                     MessageStatus.PENDING_REVIEW.value,
                     skip_reason=decision_reason,
                     content_hash=content_hash,
-                    processing_result={
-                        "action": ProcessAction.REVIEW.value,
-                        "text": (result.message or message).text,
-                        "publish_mode": publish_mode.value,
-                    },
+                    processing_result=review_payload,
                 )
                 await session.commit()
-                processed_msg = result.message or message
                 detail = result.detail if isinstance(result.detail, dict) else {}
                 await self.review_service.create_from_message(
                     processed=record,
@@ -372,29 +467,13 @@ class MessageService:
                 return
 
             publish_msg = result.message or message
+            publish_payload = message_to_dict(publish_msg)
+            publish_payload["publish_mode"] = publish_mode.value
             await repo.update_status(
                 record,
                 MessageStatus.PENDING_PUBLISH.value,
                 content_hash=content_hash,
-                processing_result={
-                    "text": publish_msg.text,
-                    "media_type": publish_msg.media_type.value,
-                    "album_message_ids": publish_msg.album_message_ids,
-                    "publish_mode": publish_mode.value,
-                    "media_items": [
-                        {
-                            "media_type": i.media_type.value,
-                            "local_path": i.local_path,
-                            "original_filename": i.original_filename,
-                            "mime_type": i.mime_type,
-                            "file_size": i.file_size,
-                            "source_message_id": i.source_message_id,
-                            "order": i.order,
-                            "file_unique_id": i.file_unique_id,
-                        }
-                        for i in publish_msg.media_items
-                    ],
-                },
+                processing_result=publish_payload,
             )
             await session.commit()
 
@@ -428,6 +507,27 @@ class MessageService:
         target: int,
         record_id: int,
     ) -> None:
+        try:
+            targets, routing_block = await self._refresh_routing(message)
+        except Exception as exc:
+            await self._mark_failed(message, exc, record_id, increment_retry=True)
+            return
+
+        if routing_block is not None:
+            await self._mark_routing_failed(message, routing_block)
+            return
+
+        publish_mode = self.channel_service.get_publish_mode(message.source_chat_id)
+        if self._paused or publish_mode == PublishMode.PAUSED:
+            logger.info(
+                "publish_paused",
+                source_chat_id=message.source_chat_id,
+                source_message_id=message.source_message_id,
+                publish_mode=publish_mode.value,
+                global_paused=self._paused,
+            )
+            return
+
         async with self.session_factory() as session:
             repo = MessageRepository(session)
             record = await repo.get_by_source(message.source_chat_id, message.source_message_id)
@@ -440,18 +540,33 @@ class MessageService:
             await session.commit()
 
         try:
-            targets = list(message.target_chat_ids) or [target]
             ids: list[int] = []
+            published_targets: list[int] = []
             last_exc: BaseException | None = None
             success = 0
+            routing_failure: str | None = None
             for t in targets:
+                current_targets, current_block = await self._refresh_routing(message)
+                if current_block == SOURCE_DISABLED:
+                    routing_failure = current_block
+                    break
+                if int(t) not in current_targets:
+                    routing_failure = NO_ENABLED_TARGET
+                    continue
                 try:
                     ids.extend(await self.publisher.publish(message, int(t)))
+                    published_targets.append(int(t))
                     success += 1
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
-            if success == 0 and last_exc is not None:
-                raise last_exc
+            if success == 0:
+                if last_exc is not None:
+                    raise last_exc
+                await self._mark_routing_failed(
+                    message,
+                    routing_failure or NO_ENABLED_TARGET,
+                )
+                return
         except Exception as exc:
             await self._mark_failed(message, exc, record_id, increment_retry=True)
             return
@@ -474,8 +589,48 @@ class MessageService:
                 "status": MessageStatus.PUBLISHED.value,
                 "text": message.text,
                 "media_type": message.media_type.value,
-                "target_chat_ids": message.target_chat_ids or [target],
+                "target_chat_ids": published_targets or [target],
                 "target_message_ids": ids,
+            },
+        )
+
+    async def _mark_routing_failed(
+        self,
+        message: NormalizedMessage,
+        reason: str,
+    ) -> None:
+        """Terminally fail a stale queued event when its current route is blocked."""
+        self._last_error = "SourceDisabled" if reason == SOURCE_DISABLED else "NoEnabledTarget"
+        message.target_chat_ids = []
+        message.target_chat_id = None
+        async with self.session_factory() as session:
+            repo = MessageRepository(session)
+            record = await repo.get_by_source(message.source_chat_id, message.source_message_id)
+            if record is None:
+                return
+            record.target_chat_id = None
+            await repo.update_status(
+                record,
+                MessageStatus.FAILED.value,
+                error_message=reason,
+                processing_result=message_to_dict(message),
+            )
+            await session.commit()
+        logger.warning(
+            "message_routing_blocked_before_publish",
+            source_chat_id=message.source_chat_id,
+            source_message_id=message.source_message_id,
+            reason=reason,
+        )
+        self.history.write(
+            source_chat_id=message.source_chat_id,
+            source_message_id=message.source_message_id,
+            payload={
+                "status": MessageStatus.FAILED.value,
+                "text": message.text,
+                "reason": reason,
+                "media_type": message.media_type.value,
+                "target_chat_ids": [],
             },
         )
 
@@ -504,7 +659,7 @@ class MessageService:
                 status,
                 error_message=summary["message"],
                 increment_retry=increment_retry,
-                processing_result=summary,
+                processing_result=message_to_dict(message),
             )
             retry_count = record.retry_count
             await session.commit()
@@ -530,41 +685,63 @@ class MessageService:
             for record in records:
                 if record.target_message_ids:
                     continue
-                await repo.update_status(record, MessageStatus.PENDING_PUBLISH.value)
                 msg = self._message_from_record(record)
+                if msg is None:
+                    await self._mark_invalid_stored_payload(repo, record)
+                    continue
+                await repo.update_status(record, MessageStatus.PENDING_PUBLISH.value)
                 count += 1
                 await self.queue.put(QueueItem(message=msg))
             await session.commit()
         return count
 
-    def _message_from_record(self, record: Any) -> NormalizedMessage:
-        from app.schemas.message import MediaItem, MediaType
+    def _message_from_record(self, record: Any) -> NormalizedMessage | None:
+        payload = record.processing_result
+        if not isinstance(payload, dict):
+            return None
 
-        payload = record.processing_result if isinstance(record.processing_result, dict) else {}
-        media_type = MediaType(payload.get("media_type", MediaType.TEXT.value))
-        items = []
-        for raw in payload.get("media_items") or []:
-            items.append(
-                MediaItem(
-                    media_type=MediaType(raw.get("media_type", MediaType.DOCUMENT.value)),
-                    local_path=raw.get("local_path"),
-                    original_filename=raw.get("original_filename"),
-                    mime_type=raw.get("mime_type"),
-                    file_size=raw.get("file_size"),
-                    source_message_id=raw.get("source_message_id"),
-                    order=int(raw.get("order") or 0),
-                    file_unique_id=raw.get("file_unique_id"),
-                )
-            )
-        return NormalizedMessage(
+        # Legacy recoverable records stored a partial message dictionary. Backfill
+        # identifiers from their columns, but reject error summaries and empty
+        # shells so they can never become blank outbound Telegram messages.
+        has_legacy_message_shape = any(
+            key in payload for key in ("text", "media_type", "media_items")
+        )
+        if not has_legacy_message_shape:
+            return None
+        restored_payload = dict(payload)
+        restored_payload.setdefault("source_chat_id", record.source_chat_id)
+        restored_payload.setdefault("source_message_id", record.source_message_id)
+        restored_payload.setdefault("grouped_id", record.grouped_id)
+        restored_payload.setdefault("target_chat_id", record.target_chat_id)
+        if "target_chat_ids" not in restored_payload:
+            target = record.target_chat_id or self.settings.target_channel_id
+            restored_payload["target_chat_ids"] = [target] if target is not None else []
+
+        try:
+            message = message_from_dict(restored_payload)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if message.source_chat_id != record.source_chat_id:
+            return None
+        if message.source_message_id != record.source_message_id:
+            return None
+        if not message.text.strip() and not message.media_items:
+            return None
+        return message
+
+    async def _mark_invalid_stored_payload(self, repo: MessageRepository, record: Any) -> None:
+        self._last_error = "InvalidStoredPayload"
+        previous_status = record.status
+        await repo.update_status(
+            record,
+            MessageStatus.FAILED.value,
+            error_message=INVALID_STORED_PAYLOAD,
+        )
+        logger.error(
+            "message_recovery_skipped_invalid_payload",
             source_chat_id=record.source_chat_id,
             source_message_id=record.source_message_id,
-            grouped_id=record.grouped_id,
-            text=str(payload.get("text") or ""),
-            media_type=media_type,
-            media_items=items,
-            album_message_ids=list(payload.get("album_message_ids") or []),
-            target_chat_id=record.target_chat_id or self.settings.target_channel_id,
+            previous_status=previous_status,
         )
 
     async def recover_pending(self) -> int:
@@ -586,10 +763,13 @@ class MessageService:
                 if record.target_message_ids:
                     await repo.update_status(record, MessageStatus.PUBLISHED.value)
                     continue
+                msg = self._message_from_record(record)
+                if msg is None:
+                    await self._mark_invalid_stored_payload(repo, record)
+                    continue
                 # Stuck publishing -> retry
                 if record.status == MessageStatus.PUBLISHING.value:
                     await repo.update_status(record, MessageStatus.RETRYING.value)
-                msg = self._message_from_record(record)
                 try:
                     self.queue.put_nowait(QueueItem(message=msg))
                     count += 1

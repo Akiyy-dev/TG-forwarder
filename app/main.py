@@ -7,6 +7,7 @@ import signal
 from typing import Any
 
 import uvicorn
+from aiogram import Dispatcher
 from telethon import TelegramClient
 from telethon.tl.types import Channel
 
@@ -28,6 +29,24 @@ from app.services.message_service import MessageService
 from app.utils.files import ensure_dir
 
 logger = get_logger(__name__)
+
+
+def _create_bot_dispatcher(
+    settings: Settings,
+    *,
+    message_service: MessageService,
+    channel_service: ChannelService,
+    listener: TelegramListener,
+) -> Dispatcher | None:
+    if not settings.bot_polling_enabled:
+        logger.info("bot_polling_disabled")
+        return None
+    return create_dispatcher(
+        settings,
+        message_service=message_service,
+        channel_service=channel_service,
+        listener=listener,
+    )
 
 
 async def resolve_source_channels(
@@ -187,7 +206,7 @@ async def run_app() -> None:
     retain_paths = await ReviewService(session_factory).active_media_paths()
     media_service.cleanup_expired(retain_paths=retain_paths)
 
-    dp = create_dispatcher(
+    dp = _create_bot_dispatcher(
         settings,
         message_service=message_service,
         channel_service=channel_service,
@@ -230,6 +249,7 @@ async def run_app() -> None:
         review_service,
         publisher,
         media_service,
+        channel_service,
     )
     auto_approve = ReviewAutoApproveService(
         session_factory,
@@ -238,11 +258,14 @@ async def run_app() -> None:
     )
     auto_approve.start()
 
+    polling_task: asyncio.Task[Any] | None = None
     tasks: set[asyncio.Task[Any]] = {
-        asyncio.create_task(dp.start_polling(bot), name="bot_polling"),
         asyncio.create_task(listener.run_until_disconnected(), name="listener"),
         asyncio.create_task(stop_event.wait(), name="stop_waiter"),
     }
+    if dp is not None:
+        polling_task = asyncio.create_task(dp.start_polling(bot), name="bot_polling")
+        tasks.add(polling_task)
 
     uvicorn_server: uvicorn.Server | None = None
     if settings.web_enabled:
@@ -258,7 +281,12 @@ async def run_app() -> None:
         tasks.add(asyncio.create_task(uvicorn_server.serve(), name="web_api"))
         logger.info("web_api_starting", host=settings.web_host, port=settings.web_port)
 
-    logger.info("app_started", app_env=settings.app_env, web_enabled=settings.web_enabled)
+    logger.info(
+        "app_started",
+        app_env=settings.app_env,
+        web_enabled=settings.web_enabled,
+        bot_polling_enabled=settings.bot_polling_enabled,
+    )
 
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
@@ -269,7 +297,8 @@ async def run_app() -> None:
     await auto_approve.stop()
     await listener.stop()
     await message_service.stop_workers()
-    await dp.stop_polling()
+    if dp is not None and polling_task is not None and not polling_task.done():
+        await dp.stop_polling()
     for task in pending | done:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

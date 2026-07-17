@@ -69,7 +69,11 @@ class TelegramListener:
         self._running = True
         self._connected = True
 
-        chats = list(self.source_chat_ids) or None
+        if not self.source_chat_ids:
+            logger.warning("listener_idle_no_sources")
+            return
+
+        chats = list(self.source_chat_ids)
 
         @self.client.on(events.Album(chats=chats))
         async def _album_handler(event: events.Album.Event) -> None:
@@ -109,7 +113,7 @@ class TelegramListener:
         chat_id = int(chat.id)
         full_id = int(f"-100{chat_id}") if chat_id > 0 else chat_id
         allowed = self.source_chat_ids
-        ok = not allowed or chat_id in allowed or full_id in allowed
+        ok = chat_id in allowed or full_id in allowed
         return ok, chat_id, full_id
 
     async def _normalize_message(

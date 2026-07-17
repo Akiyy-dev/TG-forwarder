@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from app.api.dependencies import ViewerUser, get_ctx
 from app.api.schemas import Envelope
+from app.api.status import queue_status
 from app.context import AppContext
 from app.database.models import (
     KeywordRule,
@@ -47,6 +48,7 @@ async def dashboard_summary(
     message_stats = await ctx.message_service.stats()
     recent_errors = await ctx.message_service.recent_errors()
     paused = await ctx.message_service.refresh_paused()
+    queue = await queue_status(ctx)
     since = datetime.now(UTC) - timedelta(days=1)
 
     async with ctx.session_factory() as session:
@@ -132,6 +134,8 @@ async def dashboard_summary(
             ).scalars()
         )
 
+    publisher_running = sender_running
+    bot_polling_enabled = ctx.settings.bot_polling_enabled
     return Envelope(
         data={
             "service": {
@@ -143,8 +147,12 @@ async def dashboard_summary(
                 "telegram_receiver_running": telegram_receiver_running,
                 "safew_receiver_running": safew_receiver_running,
                 "sender_running": sender_running,
-                "bot_available": sender_running,
-                "queue_size": ctx.message_service.queue_size,
+                "publisher_running": publisher_running,
+                "bot_polling_enabled": bot_polling_enabled,
+                # Compatibility for older Web clients; admin polling is separate from
+                # outbound Telegram publishing.
+                "bot_available": sender_running and bot_polling_enabled,
+                **queue,
             },
             "counts": {
                 "pending_review": pending_review,
