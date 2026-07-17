@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.4.0...v0.4.1) (2026-07-17)
+
+
+### Documentation
+
+* overhaul README and remove obsolete SafeW deployment guide ([ce87cc4](https://github.com/Akiyy-dev/TG-forwarder/commit/ce87cc4efa97a365ae216c196ccf0be74acff3f9))
+
 ## [0.4.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.3...v0.4.0) (2026-07-17)
 
 
