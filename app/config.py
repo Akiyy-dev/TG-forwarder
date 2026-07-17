@@ -75,9 +75,6 @@ class Settings(BaseSettings):
     bot_token: str = ""
     bot_admin_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     bot_polling_enabled: bool = True
-    target_channel_id: int = 0
-
-    source_channels: Annotated[list[str], NoDecode] = Field(default_factory=list)
     database_url: str = "sqlite+aiosqlite:///./data/database/app.db"
     redis_url: str = "redis://redis:6379/0"
     redis_incoming_stream: str = "forwarder:incoming"
@@ -87,7 +84,6 @@ class Settings(BaseSettings):
     redis_stream_maxlen: int = 0
     redis_block_ms: int = 5000
     redis_claim_idle_ms: int = 300000
-    channels_config_path: str = "./config/channels.yaml"
     rules_config_path: str = "./config/rules.yaml"
 
     download_dir: str = "./data/downloads"
@@ -148,7 +144,6 @@ class Settings(BaseSettings):
     @field_validator(
         "blocked_keywords",
         "allowed_keywords",
-        "source_channels",
         "blocked_link_domains",
         "allowed_link_domains",
         "web_allowed_origins",
@@ -183,28 +178,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_required(self) -> Settings:
-        from app.config_files import load_channels_config
-
         if self.app_role in {"all", "telegram-receiver"} and (
             self.telegram_api_id <= 0 or not self.telegram_api_hash
         ):
             msg = "TELEGRAM_API_ID and TELEGRAM_API_HASH are required for telegram-receiver"
             raise ValueError(msg)
-        if (
-            self.app_role == "all"
-            and not self.source_channels
-            and not load_channels_config(self.channels_config_path)
-        ):
-            msg = (
-                "SOURCE_CHANNELS must contain at least one channel, "
-                "or provide non-empty channels in the channels config file"
-            )
-            raise ValueError(msg)
         if self.app_role in {"all", "sender"} and not self.bot_token:
             msg = "BOT_TOKEN is required for sender"
-            raise ValueError(msg)
-        if self.app_role in {"all", "sender"} and self.target_channel_id == 0:
-            msg = "TARGET_CHANNEL_ID is required for sender"
             raise ValueError(msg)
         if (
             self.app_role in {"all", "sender"}
@@ -237,8 +217,7 @@ class Settings(BaseSettings):
             f"log_level={self.log_level!r}, "
             f"telegram_api_id=***, telegram_api_hash=***, telegram_phone=***, "
             f"bot_token=***, bot_polling_enabled={self.bot_polling_enabled}, "
-            f"target_channel_id={self.target_channel_id}, "
-            f"source_channels={self.source_channels!r}, web_enabled={self.web_enabled})"
+            f"web_enabled={self.web_enabled})"
         )
 
 

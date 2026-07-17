@@ -90,6 +90,26 @@ async def _seed_task(
     return task.id
 
 
+async def _seed_routing(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    source_chat_id: int = -1001,
+    target_chat_id: int = -1002,
+) -> None:
+    async with session_factory() as session:
+        source = SourceChannel(
+            chat_id=source_chat_id,
+            title="source",
+            enabled=True,
+            target_channel_id=target_chat_id,
+        )
+        target = TargetChannel(chat_id=target_chat_id, title="target", enabled=True)
+        session.add_all([source, target])
+        await session.flush()
+        session.add(SourceTargetLink(source_id=source.id, target_id=target.id))
+        await session.commit()
+
+
 async def _approve_task(
     session_factory: async_sessionmaker[AsyncSession],
     task_id: int,
@@ -118,6 +138,7 @@ async def test_review_edit_publish_api(
     publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
     ctx = _ctx(settings_env, session_factory, publisher)
     await ctx.auth_service.create_user(username="rev", password="password123", role=Role.REVIEWER)
+    await _seed_routing(session_factory)
     task_id = await _seed_task(session_factory)
     safew_task_id = await _seed_task(
         session_factory,
@@ -175,6 +196,7 @@ async def test_concurrent_publish_once(
     bot.send_message = AsyncMock(return_value=MagicMock(message_id=1))
     publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
     ctx = _ctx(settings_env, session_factory, publisher)
+    await _seed_routing(session_factory)
     task_id = await _seed_task(session_factory)
     svc = ReviewService(session_factory)
     async with session_factory() as session:

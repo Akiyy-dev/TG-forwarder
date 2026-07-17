@@ -129,7 +129,7 @@ export function ChannelsPage() {
   const refreshMut = useMutation({
     mutationFn: () => refreshChannels(),
     onSuccess: async (res) => {
-      setMsg(`刷新完成：YAML ${String(res.yaml_upserted)}，访问状态更新 ${String(res.access_updated)}`)
+      setMsg(`频道状态刷新完成：访问状态更新 ${String(res.access_updated)}`)
       await qc.invalidateQueries({ queryKey: ['channels'] })
       await qc.invalidateQueries({ queryKey: ['targets'] })
     },
@@ -162,7 +162,7 @@ export function ChannelsPage() {
         <div>
           <Title order={2}>频道管理</Title>
           <Text c="dimmed" size="sm">
-            多对多绑定、账户可达检测与 YAML 刷新
+            来源和目标均由 Web 管理，支持多对多绑定与可达性检查
           </Text>
         </div>
         {isAdmin && (

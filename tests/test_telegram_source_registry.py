@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.config import Settings
 from app.database.models import SourceChannel
 from app.entrypoints import telegram_receiver
 from app.listeners.safew_notifications import safew_chat_id
@@ -15,7 +13,6 @@ from app.schemas.message import MediaItem, MediaType, NormalizedMessage
 from app.services.telegram_source_registry import (
     TelegramSourceSnapshot,
     load_telegram_source_snapshot,
-    select_effective_source_ids,
     telegram_source_selection_changed,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -36,11 +33,10 @@ async def test_database_snapshot_excludes_safew_and_disabled_sources(
 
     snapshot = await load_telegram_source_snapshot(session_factory)
 
-    assert snapshot.has_database_sources is True
     assert snapshot.enabled_chat_ids == frozenset({-1001})
 
 
-async def test_all_disabled_database_sources_do_not_use_fallback(
+async def test_all_disabled_database_sources_select_nothing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
@@ -49,11 +45,10 @@ async def test_all_disabled_database_sources_do_not_use_fallback(
 
     snapshot = await load_telegram_source_snapshot(session_factory)
 
-    assert snapshot.has_database_sources is True
-    assert select_effective_source_ids(snapshot, {-1009}) == set()
+    assert snapshot.enabled_chat_ids == frozenset()
 
 
-async def test_only_safew_rows_leave_legacy_fallback_available(
+async def test_only_safew_rows_select_no_telegram_sources(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     safe_id = safew_chat_id("SafeW only")
@@ -63,24 +58,21 @@ async def test_only_safew_rows_leave_legacy_fallback_available(
 
     snapshot = await load_telegram_source_snapshot(session_factory)
 
-    assert snapshot.has_database_sources is False
-    assert select_effective_source_ids(snapshot, {-1009, safe_id}) == {-1009}
+    assert snapshot.enabled_chat_ids == frozenset()
 
 
-def test_source_selection_change_includes_first_database_registration() -> None:
-    legacy = TelegramSourceSnapshot(False, frozenset())
-    database_disabled = TelegramSourceSnapshot(True, frozenset())
-    database_enabled = TelegramSourceSnapshot(True, frozenset({-1001}))
+def test_source_selection_change_tracks_database_registration() -> None:
+    database_empty = TelegramSourceSnapshot(frozenset())
+    database_enabled = TelegramSourceSnapshot(frozenset({-1001}))
 
-    assert telegram_source_selection_changed(legacy, database_disabled) is True
-    assert telegram_source_selection_changed(database_disabled, database_enabled) is True
+    assert telegram_source_selection_changed(database_empty, database_enabled) is True
     assert telegram_source_selection_changed(database_enabled, database_enabled) is False
 
 
 async def test_initial_database_failure_is_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = TelegramSourceSnapshot(True, frozenset({-1001}))
+    expected = TelegramSourceSnapshot(frozenset({-1001}))
     loader = AsyncMock(side_effect=[RuntimeError("temporary"), expected])
     monkeypatch.setattr(telegram_receiver, "load_telegram_source_snapshot", loader)
 
@@ -92,32 +84,11 @@ async def test_initial_database_failure_is_retried(
     assert loader.await_count == 2
 
 
-async def test_empty_legacy_configuration_does_not_open_telegram_session(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    resolver = AsyncMock()
-    monkeypatch.setattr(telegram_receiver, "resolve_source_channels", resolver)
-    settings = Settings(
-        app_role="telegram-receiver",
-        telegram_api_id=1,
-        telegram_api_hash="hash",
-        source_channels=[],
-        channels_config_path=str(tmp_path / "missing.yaml"),
-        _env_file=None,
-    )
-
-    source_ids = await telegram_receiver._load_legacy_source_ids(settings)
-
-    assert source_ids == set()
-    resolver.assert_not_awaited()
-
-
 async def test_monitor_ignores_temporary_database_failure_then_detects_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    initial = TelegramSourceSnapshot(True, frozenset({-1001}))
-    changed = TelegramSourceSnapshot(True, frozenset())
+    initial = TelegramSourceSnapshot(frozenset({-1001}))
+    changed = TelegramSourceSnapshot(frozenset())
     loader = AsyncMock(side_effect=[RuntimeError("temporary"), changed])
     monkeypatch.setattr(telegram_receiver, "load_telegram_source_snapshot", loader)
 

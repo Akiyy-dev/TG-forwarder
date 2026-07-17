@@ -30,8 +30,8 @@ PostgreSQL：频道、规则、审核任务、处理状态
 
 当前 Compose 只应运行一个 `sender` 副本，以维持同一来源内的处理顺序。Web 中依赖
 Telethon 客户端的“扫描账号频道”功能在拆分模式下暂不可用；来源可通过
-`SOURCE_CHANNELS`、`config/channels.yaml` 或收到的 SafeW 通知自动登记。目标权限检查和
-测试消息会异步交给 `sender` 执行。
+Web 手动填写 Telegram 频道 ID，SafeW 来源则在收到通知后自动登记。目标权限检查和测试
+消息会异步交给 `sender` 执行。
 
 ## 服务器要求
 
@@ -56,10 +56,9 @@ chmod 600 .env
 - `POSTGRES_PASSWORD`、`WEB_SECRET_KEY`、`NOVNC_PASSWORD`；数据库密码会嵌入连接
   URL，建议只使用足够长的字母和数字组合；
 - `TELEGRAM_API_ID`、`TELEGRAM_API_HASH`；
-- `BOT_TOKEN`、`TARGET_CHANNEL_ID`；如需 Bot 管理命令，再填写 `BOT_ADMIN_IDS` 并保持
+- `BOT_TOKEN`；如需 Bot 管理命令，再填写 `BOT_ADMIN_IDS` 并保持
   `BOT_POLLING_ENABLED=true`。同一 Bot Token 被其他程序监听时应设为 `false`，发布功能
-  不受影响；
-- `SOURCE_CHANNELS`，或在 `config/channels.yaml` 中填写 Telegram 来源。
+  不受影响。
 
 先检查配置并构建镜像：
 
@@ -84,11 +83,11 @@ docker compose run --rm telegram-receiver python -m scripts.create_session
 
 验证码和两步验证密码只在交互提示中输入，不要写入 `.env`。Session 会保存在 `telegram-session` 卷。
 
-Telegram 来源以 Web/PostgreSQL 中的启用状态为准；修改后接收端会在约 5 秒内正常退出，
+首次启动后，在 Web 的“频道管理”中添加 Telegram 来源、Telegram 目标并建立绑定关系。
+频道只以 Web/PostgreSQL 中的配置为准，`.env` 和 YAML 不再提供来源或目标回退。修改
+Telegram 来源后，接收端会在约 5 秒内正常退出，
 并由 Compose 的 `restart: unless-stopped` 自动拉起，以重新加载 Telethon 过滤器。若所有
 Telegram 来源均关闭，接收端会保持空闲且不会退化为监听账号内全部频道。
-仍使用 `SOURCE_CHANNELS` 或 `config/channels.yaml` 作为首次导入来源时，Web 会阻止删除
-最后一个 Telegram 来源；请将它关闭，或先移除旧式配置后再删除。
 
 启动服务：
 
@@ -193,7 +192,7 @@ docker compose build safew-receiver && docker compose up -d safew-receiver
 - `postgres-data`：业务数据库；
 - `telegram-session`：Telegram 用户登录会话；
 - `safew-profile` 与 `safew-home`：SafeW 登录和桌面资料；
-- `config/`：频道、规则和运行时配置。
+- `config/`：规则和运行时配置；频道配置位于 PostgreSQL。
 
 ## 常见排查
 

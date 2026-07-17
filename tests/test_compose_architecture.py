@@ -20,7 +20,9 @@ def test_compose_has_independent_business_services() -> None:
         "${BOT_POLLING_ENABLED:-true}"
     )
     assert services["web"]["environment"]["BOT_POLLING_ENABLED"] == ("${BOT_POLLING_ENABLED:-true}")
-    assert services["web"]["environment"]["SOURCE_CHANNELS"] == "${SOURCE_CHANNELS:-}"
+    assert "SOURCE_CHANNELS" not in services["web"]["environment"]
+    assert "SOURCE_CHANNELS" not in services["telegram-receiver"]["environment"]
+    assert "TARGET_CHANNEL_ID" not in config["x-app-environment"]
     assert services["telegram-receiver"]["command"][-1] == ("app.entrypoints.telegram_receiver")
     assert services["telegram-receiver"]["depends_on"]["migrate"]["condition"] == (
         "service_completed_successfully"

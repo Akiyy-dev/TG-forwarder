@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from app.config import Settings
 from app.entrypoints import sender
+from app.listeners.safew_notifications import safew_chat_id
 from app.messaging.models import IncomingMessageEvent
 from app.schemas.message import MediaType, NormalizedMessage
 
@@ -29,8 +30,8 @@ def _incoming_event(
     return IncomingMessageEvent.create(cast(Any, backend), message)
 
 
-@pytest.mark.parametrize("origin", [None, "database"])
-async def test_unknown_telegram_source_is_ignored_unless_from_legacy_config(
+@pytest.mark.parametrize("origin", [None, "database", "legacy_config"])
+async def test_unknown_telegram_source_is_always_ignored(
     settings_env: Settings,
     origin: str | None,
 ) -> None:
@@ -47,32 +48,18 @@ async def test_unknown_telegram_source_is_ignored_unless_from_legacy_config(
     channel_service.sync_from_config_rows.assert_not_awaited()
 
 
-async def test_unknown_legacy_telegram_source_is_registered_once(
-    settings_env: Settings,
-) -> None:
-    channel_service = MagicMock(configured_chat_ids=set())
-    channel_service.sync_from_config_rows = AsyncMock()
-
-    accepted = await sender._accept_or_register_source(
-        _incoming_event("telegram", source_registry_origin="legacy_config"),
-        settings_env,
-        channel_service,
-    )
-
-    assert accepted is True
-    channel_service.sync_from_config_rows.assert_awaited_once()
-    row = channel_service.sync_from_config_rows.await_args.args[0][0]
-    assert row["chat_id"] == -100123
-    assert row["enabled"] is True
-
-
 async def test_safew_auto_registration_setting_is_preserved(settings_env: Settings) -> None:
     channel_service = MagicMock(configured_chat_ids=set())
     channel_service.sync_from_config_rows = AsyncMock()
-    event = _incoming_event("safew")
+    source_id = safew_chat_id("SafeW test")
+    event = _incoming_event("safew", source_chat_id=source_id)
 
     assert await sender._accept_or_register_source(event, settings_env, channel_service) is True
     channel_service.sync_from_config_rows.assert_awaited_once()
+    row = channel_service.sync_from_config_rows.await_args.args[0][0]
+    assert row["chat_id"] == source_id
+    assert row["enabled"] is True
+    assert "target_chat_id" not in row
 
     settings_env.safew_auto_register_sources = False
     channel_service.sync_from_config_rows.reset_mock()

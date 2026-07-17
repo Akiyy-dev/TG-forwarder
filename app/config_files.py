@@ -1,4 +1,4 @@
-"""Load channel/rules seed config files (YAML)."""
+"""Load rule seed config files (YAML)."""
 
 from __future__ import annotations
 
@@ -20,20 +20,6 @@ def load_yaml_file(path: str | Path) -> Any:
     if not text.strip():
         return None
     return yaml.safe_load(text)
-
-
-def load_channels_config(path: str | Path) -> list[dict[str, Any]]:
-    """Return list of channel seed entries from YAML."""
-    data = load_yaml_file(path)
-    if data is None:
-        return []
-    if isinstance(data, dict):
-        items = data.get("channels") or data.get("sources") or []
-    elif isinstance(data, list):
-        items = data
-    else:
-        return []
-    return [item for item in items if isinstance(item, dict)]
 
 
 def load_rules_config(path: str | Path) -> list[dict[str, Any]]:

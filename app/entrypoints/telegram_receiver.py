@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.config_files import load_channels_config
 from app.database.session import dispose_engine, init_engine
 from app.entrypoints.common import install_shutdown_handlers
 from app.listeners.telegram_listener import TelegramListener
@@ -16,14 +15,9 @@ from app.logging import get_logger, setup_logging
 from app.messaging.redis_streams import RedisStreamBus
 from app.schemas.message import NormalizedMessage
 from app.services.media_service import MediaService
-from app.services.source_resolver import (
-    resolve_channel_config_entries,
-    resolve_source_channels,
-)
 from app.services.telegram_source_registry import (
     TelegramSourceSnapshot,
     load_telegram_source_snapshot,
-    select_effective_source_ids,
     telegram_source_selection_changed,
 )
 from app.utils.files import ensure_dir
@@ -93,28 +87,8 @@ async def _monitor_source_changes(
                 "telegram_source_selection_changed",
                 old_source_count=len(initial.enabled_chat_ids),
                 new_source_count=len(current.enabled_chat_ids),
-                old_database_managed=initial.has_database_sources,
-                new_database_managed=current.has_database_sources,
             )
             return
-
-
-async def _load_legacy_source_ids(settings: Settings) -> set[int]:
-    """Load YAML/environment sources for installations not yet managed in the DB."""
-
-    entries = load_channels_config(settings.channels_config_path)
-    if entries:
-        rows = await resolve_channel_config_entries(settings, entries)
-        fallback_ids = {int(row["chat_id"]) for row in rows if row.get("enabled") is not False}
-    elif settings.source_channels:
-        resolved = await resolve_source_channels(settings)
-        fallback_ids = {row[0] for row in resolved}
-    else:
-        fallback_ids = set()
-    return select_effective_source_ids(
-        TelegramSourceSnapshot(has_database_sources=False, enabled_chat_ids=frozenset()),
-        fallback_ids,
-    )
 
 
 async def _publish_incoming_message(
@@ -171,11 +145,8 @@ async def run() -> None:
         if snapshot is None:
             return
 
-        fallback_ids = (
-            await _load_legacy_source_ids(settings) if not snapshot.has_database_sources else set()
-        )
-        source_ids = select_effective_source_ids(snapshot, fallback_ids)
-        source_origin = "database" if snapshot.has_database_sources else "legacy_config"
+        source_ids = set(snapshot.enabled_chat_ids)
+        source_origin = "database"
         await bus.ping()
 
         media_service = MediaService(
@@ -198,7 +169,6 @@ async def run() -> None:
                 on_message=on_message,
                 album_wait_seconds=settings.album_wait_seconds,
                 album_max_wait_seconds=settings.album_max_wait_seconds,
-                target_channel_id=None,
             )
             media_service.downloader = listener
             await listener.start()

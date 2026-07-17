@@ -107,11 +107,7 @@ class ReviewPublishService:
                 return []
             active_bindings = set(self.channel_service.get_targets_for(task.source_chat_id))
             return [target for target in candidates if target in active_bindings]
-
-        # Older deployments could create reviews before a source row existed.
-        # Preserve those legacy snapshots unless their target is now explicitly
-        # disabled in the target-channel registry.
-        return [target for target in candidates if self.channel_service.is_target_available(target)]
+        return []
 
     def _routing_block_reason(self, task: ReviewTask, targets: list[int]) -> str | None:
         if (

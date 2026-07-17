@@ -79,6 +79,19 @@ async def test_enqueue_persists_full_payload_before_processing(
 ) -> None:
     service = _service(settings_env, session_factory)
     message = _message()
+    first = await service.channel_service.create_target(
+        {"chat_id": -100801, "title": "first target"}
+    )
+    second = await service.channel_service.create_target(
+        {"chat_id": -100802, "title": "second target"}
+    )
+    await service.channel_service.create_source(
+        {
+            "chat_id": message.source_chat_id,
+            "title": "source",
+            "target_ids": [first.id, second.id],
+        }
+    )
 
     assert await service.enqueue(message) is True
 

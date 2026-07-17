@@ -48,7 +48,6 @@ class SourceCreateRequest(APIModel):
     title: str | None = Field(default=None, max_length=512)
     enabled: bool = True
     publish_mode: PublishMode = PublishMode.REVIEW
-    target_channel_id: int | None = None
     target_ids: list[int] | None = None
     processing_profile: str = Field(default="default", max_length=64)
 
@@ -58,7 +57,6 @@ class SourcePatchRequest(APIModel):
     title: str | None = Field(default=None, max_length=512)
     enabled: bool | None = None
     publish_mode: PublishMode | None = None
-    target_channel_id: int | None = None
     processing_profile: str | None = Field(default=None, max_length=64)
 
 

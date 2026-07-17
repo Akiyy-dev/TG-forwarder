@@ -3,7 +3,6 @@ x-app-environment: &app-environment
   DATABASE_URL: postgresql+asyncpg://forwarder:${POSTGRES_PASSWORD}@postgres:5432/forwarder
   REDIS_URL: redis://redis:6379/0
   DOWNLOAD_DIR: /data/downloads
-  TARGET_CHANNEL_ID: ${TARGET_CHANNEL_ID}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-app-service: &app-service
@@ -75,7 +74,6 @@ services:
       WEB_ADMIN_PASSWORD_HASH: ${WEB_ADMIN_PASSWORD_HASH:-}
       WEB_SECURE_COOKIES: ${WEB_SECURE_COOKIES:-false}
       BOT_POLLING_ENABLED: ${BOT_POLLING_ENABLED:-true}
-      SOURCE_CHANNELS: ${SOURCE_CHANNELS:-}
     ports:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
     healthcheck:
@@ -115,7 +113,6 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       TELEGRAM_PHONE: ${TELEGRAM_PHONE:-}
       TELEGRAM_SESSION_PATH: /data/sessions/listener
-      SOURCE_CHANNELS: ${SOURCE_CHANNELS:-}
     volumes:
       - media-data:/data/downloads
       - telegram-session:/data/sessions

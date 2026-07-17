@@ -100,19 +100,7 @@ class MessageService:
         return self.queue.qsize()
 
     def _resolve_targets(self, message: NormalizedMessage) -> list[int]:
-        """Resolve current targets without reviving disabled channel assignments."""
-        if message.source_chat_id in self.channel_service.configured_chat_ids:
-            return self.channel_service.get_targets_for(message.source_chat_id)
-
-        incoming = list(message.target_chat_ids)
-        if not incoming and message.target_chat_id is not None:
-            incoming = [message.target_chat_id]
-        if incoming:
-            return [
-                int(chat_id)
-                for chat_id in incoming
-                if self.channel_service.is_target_available(int(chat_id))
-            ]
+        """Resolve routing exclusively from the current Web-managed registry."""
         return self.channel_service.get_targets_for(message.source_chat_id)
 
     def _routing_block_reason(
@@ -714,7 +702,7 @@ class MessageService:
         restored_payload.setdefault("grouped_id", record.grouped_id)
         restored_payload.setdefault("target_chat_id", record.target_chat_id)
         if "target_chat_ids" not in restored_payload:
-            target = record.target_chat_id or self.settings.target_channel_id
+            target = record.target_chat_id
             restored_payload["target_chat_ids"] = [target] if target is not None else []
 
         try:

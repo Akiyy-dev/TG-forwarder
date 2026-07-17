@@ -31,14 +31,12 @@ class TelegramListener:
         on_message: MessageHandler,
         album_wait_seconds: float = 2.5,
         album_max_wait_seconds: float = 20.0,
-        target_channel_id: int | None = None,
     ) -> None:
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_path = session_path
         self.source_chat_ids = set(source_chat_ids)
         self.on_message = on_message
-        self.target_channel_id = target_channel_id
         self.client = TelegramClient(session_path, api_id, api_hash)
         self.album_collector = AlbumCollector(
             wait_seconds=album_wait_seconds,
@@ -127,7 +125,6 @@ class TelegramListener:
             message,
             chat_username=getattr(chat, "username", None),
             chat_title=getattr(chat, "title", None),
-            target_chat_id=self.target_channel_id,
         )
         if full_id < 0:
             normalized.source_chat_id = full_id

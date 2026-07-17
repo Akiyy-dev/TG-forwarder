@@ -9,7 +9,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.config_files import load_channels_config
 from app.database.models import SourceChannel, SourceTargetLink, TargetChannel
 from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
@@ -18,15 +17,6 @@ from app.services.telegram_account import check_channel_accessible, list_broadca
 from app.source_backends import is_safew_chat_id
 
 logger = get_logger(__name__)
-
-
-def parse_channel_ref(ref: str) -> str | int:
-    value = ref.strip()
-    if value.startswith("@"):
-        return value
-    if value.lstrip("-").isdigit():
-        return int(value)
-    return value
 
 
 class ChannelServiceError(Exception):
@@ -48,7 +38,6 @@ class ChannelService:
         self._configs: dict[int, SourceChannelConfig] = {}
         self._source_by_id: dict[int, int] = {}
         self._target_titles: dict[int, str] = {}
-        self._disabled_target_chat_ids: set[int] = set()
 
     @property
     def enabled_chat_ids(self) -> set[int]:
@@ -67,20 +56,9 @@ class ChannelService:
 
     def get_targets_for(self, source_chat_id: int) -> list[int]:
         cfg = self._configs.get(source_chat_id)
-        if cfg is not None:
-            if cfg.target_chat_ids is not None:
-                return list(cfg.target_chat_ids)
-            if cfg.target_channel_id is not None:
-                return [cfg.target_channel_id]
+        if cfg is None:
             return []
-        fallback = self.settings.target_channel_id
-        if fallback in self._disabled_target_chat_ids:
-            return []
-        return [fallback]
-
-    def is_target_available(self, chat_id: int) -> bool:
-        """Treat unregistered legacy targets as available, but honor disabled DB targets."""
-        return int(chat_id) not in self._disabled_target_chat_ids
+        return list(cfg.target_chat_ids or [])
 
     def display_name(self, chat_id: int) -> str:
         cfg = self._configs.get(chat_id)
@@ -100,20 +78,14 @@ class ChannelService:
         self,
         ch: SourceChannel,
         *,
-        target_chat_ids: list[int] | None = None,
+        target_chat_ids: list[int],
     ) -> SourceChannelConfig:
         try:
             mode = PublishMode(ch.publish_mode)
         except ValueError:
             mode = PublishMode.REVIEW
-        if target_chat_ids is None:
-            ids = [ch.target_channel_id] if ch.target_channel_id is not None else None
-            primary_target = ch.target_channel_id
-        else:
-            # An explicit empty list means the source only has disabled or stale
-            # linked targets. Do not revive the legacy target_channel_id value.
-            ids = target_chat_ids
-            primary_target = ids[0] if ids else None
+        ids = list(target_chat_ids)
+        primary_target = ids[0] if ids else None
         return SourceChannelConfig(
             id=ch.id,
             chat_id=ch.chat_id,
@@ -157,18 +129,8 @@ class ChannelService:
     ) -> None:
         target_map = target_map or {}
         targets = targets or []
-        self._disabled_target_chat_ids = {int(t.chat_id) for t in targets if not t.enabled}
-
-        def active_targets_for(ch: SourceChannel) -> list[int] | None:
-            linked = target_map.get(ch.id)
-            if linked is not None:
-                return linked
-            if ch.target_channel_id in self._disabled_target_chat_ids:
-                return []
-            return None
-
         self._configs = {
-            ch.chat_id: self._row_to_config(ch, target_chat_ids=active_targets_for(ch))
+            ch.chat_id: self._row_to_config(ch, target_chat_ids=target_map.get(ch.id, []))
             for ch in channels
         }
         self._enabled_ids = {ch.chat_id for ch in channels if ch.enabled}
@@ -186,35 +148,10 @@ class ChannelService:
             target_map = await self._load_target_map(session)
         self._apply_cache(channels, target_map, targets)
 
-    async def sync_from_settings(
-        self,
-        resolved: list[tuple[int, str | None, str | None]],
-    ) -> None:
-        """Persist resolved channels from env into DB and memory cache."""
-        async with self.session_factory() as session:
-            repo = ChannelRepository(session)
-            for chat_id, username, title in resolved:
-                existing = await repo.get_by_chat_id(chat_id)
-                await repo.upsert(
-                    chat_id=chat_id,
-                    username=username,
-                    title=title,
-                    enabled=True if existing is None else existing.enabled,
-                    target_channel_id=(
-                        self.settings.target_channel_id
-                        if existing is None or existing.target_channel_id is None
-                        else existing.target_channel_id
-                    ),
-                    publish_mode=None if existing is not None else PublishMode.REVIEW,
-                )
-            await session.commit()
-        await self.load_from_db()
-        logger.info("channels_synced", count=len(self._enabled_ids))
-
     async def sync_from_config_rows(self, rows: list[dict[str, Any]]) -> int:
-        """Upsert channels from resolved config-file rows.
+        """Upsert trusted runtime-discovered sources, currently SafeW conversations.
 
-        Expected keys: chat_id, username?, title?, enabled?, publish_mode?, target_chat_id?
+        Expected keys: chat_id, username?, title?, enabled?, publish_mode?.
         """
         if not rows:
             return 0
@@ -234,22 +171,14 @@ class ChannelService:
                         if enabled is not None
                         else (True if existing is None else existing.enabled)
                     ),
-                    target_channel_id=(
-                        int(row["target_chat_id"])
-                        if row.get("target_chat_id") is not None
-                        else (
-                            self.settings.target_channel_id
-                            if existing is None or existing.target_channel_id is None
-                            else existing.target_channel_id
-                        )
-                    ),
                     publish_mode=(
                         None if existing is not None else (mode or PublishMode.REVIEW.value)
                     ),
+                    access_status=("ok" if is_safew_chat_id(chat_id) else None),
                 )
             await session.commit()
         await self.load_from_db()
-        logger.info("channels_synced_from_file", count=len(rows))
+        logger.info("runtime_sources_registered", count=len(rows))
         return len(rows)
 
     async def list_sources(self) -> list[SourceChannelConfig]:
@@ -319,25 +248,19 @@ class ChannelService:
                 username=data.get("username") or access.get("username"),
                 title=data.get("title") or access.get("title"),
                 enabled=want_enabled,
-                target_channel_id=data.get("target_channel_id"),
                 processing_profile=str(data.get("processing_profile") or "default"),
                 publish_mode=mode,
                 access_status=access["status"],
             )
             target_ids = data.get("target_ids") or data.get("target_chat_ids")
-            if target_ids and data.get("target_channel_id") is None:
+            if target_ids:
                 primary = await self._resolve_target_chat_ids(session, target_ids)
                 if primary:
                     channel.target_channel_id = primary[0]
             await session.commit()
             await session.refresh(channel)
             channel_id = channel.id
-            if channel.target_channel_id is not None and not target_ids:
-                tgt = await repo.get_target_by_chat_id(channel.target_channel_id)
-                if tgt is not None:
-                    session.add(SourceTargetLink(source_id=channel_id, target_id=tgt.id))
-                    await session.commit()
-            elif target_ids:
+            if target_ids:
                 await self._replace_source_links(session, channel_id, list(target_ids))
                 await session.commit()
         await self.load_from_db()
@@ -381,12 +304,6 @@ class ChannelService:
                         f"invalid publish_mode: {data['publish_mode']}",
                         code="validation_error",
                     ) from exc
-            if "target_channel_id" in data:
-                channel.target_channel_id = data["target_channel_id"]
-                if data["target_channel_id"] is not None:
-                    tgt = await repo.get_target_by_chat_id(int(data["target_channel_id"]))
-                    if tgt is not None:
-                        await self._replace_source_links(session, source_id, [tgt.id])
             if "processing_profile" in data and data["processing_profile"] is not None:
                 channel.processing_profile = str(data["processing_profile"])
             if "access_status" in data and data["access_status"] is not None:
@@ -464,35 +381,9 @@ class ChannelService:
 
     async def delete_source(self, source_id: int) -> None:
         async with self.session_factory() as session:
-            sources = list(
-                (
-                    await session.execute(
-                        select(SourceChannel).order_by(SourceChannel.id).with_for_update()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            source = next((row for row in sources if row.id == source_id), None)
+            source = await session.get(SourceChannel, source_id)
             if source is None:
                 raise ChannelServiceError("source channel not found", code="not_found")
-
-            has_legacy_fallback = bool(
-                self.settings.source_channels
-                or load_channels_config(self.settings.channels_config_path)
-            )
-            telegram_source_count = sum(1 for row in sources if not is_safew_chat_id(row.chat_id))
-            if (
-                not is_safew_chat_id(source.chat_id)
-                and telegram_source_count == 1
-                and has_legacy_fallback
-            ):
-                raise ChannelServiceError(
-                    "cannot delete the last Telegram source while SOURCE_CHANNELS or "
-                    "channels.yaml fallback is configured; disable it instead",
-                    code="conflict",
-                )
-
             await session.delete(source)
             await session.flush()
             await session.commit()
@@ -762,43 +653,7 @@ class ChannelService:
         return await list_broadcast_channels(client)
 
     async def refresh_channels(self, client: Any) -> dict[str, Any]:
-        """Re-read YAML config and rescan account dialogs for access_status."""
-        yaml_count = 0
-        path = self.settings.channels_config_path
-        raw = load_channels_config(path)
-        if raw and client is not None:
-            rows: list[dict[str, Any]] = []
-            for entry in raw:
-                chat_id = entry.get("chat_id")
-                username = entry.get("username")
-                title = entry.get("title")
-                if chat_id is None:
-                    ref = username or entry.get("ref")
-                    if not ref:
-                        continue
-                    access = await self._resolve_access(
-                        client,
-                        username=str(ref),
-                    )
-                    if not access.get("chat_id"):
-                        continue
-                    chat_id = int(access["chat_id"])
-                    username = access.get("username") or username
-                    title = title or access.get("title")
-                else:
-                    chat_id = int(chat_id)
-                rows.append(
-                    {
-                        "chat_id": chat_id,
-                        "username": username,
-                        "title": title,
-                        "enabled": entry.get("enabled"),
-                        "publish_mode": entry.get("publish_mode"),
-                        "target_chat_id": entry.get("target_chat_id"),
-                    }
-                )
-            yaml_count = await self.sync_from_config_rows(rows)
-
+        """Rescan account dialogs for Web-managed channel access status."""
         updated = 0
         account_items: list[dict[str, Any]] = []
         if client is not None:
@@ -829,7 +684,6 @@ class ChannelService:
             await self.load_from_db()
 
         return {
-            "yaml_upserted": yaml_count,
             "access_updated": updated,
             "account_channels": len(account_items),
         }

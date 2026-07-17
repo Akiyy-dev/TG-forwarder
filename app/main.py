@@ -8,8 +8,6 @@ from typing import Any
 
 import uvicorn
 from aiogram import Dispatcher
-from telethon import TelegramClient
-from telethon.tl.types import Channel
 
 from app.api.app import create_api_app
 from app.auth.service import AuthService
@@ -23,9 +21,10 @@ from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.auto_approve import ReviewAutoApproveService
 from app.review.publish import ReviewPublishService
 from app.review.service import ReviewService
-from app.services.channel_service import ChannelService, parse_channel_ref
+from app.services.channel_service import ChannelService
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
+from app.source_backends import is_safew_chat_id
 from app.utils.files import ensure_dir
 
 logger = get_logger(__name__)
@@ -49,93 +48,6 @@ def _create_bot_dispatcher(
     )
 
 
-async def resolve_source_channels(
-    settings: Settings,
-) -> list[tuple[int, str | None, str | None]]:
-    """Resolve SOURCE_CHANNELS refs to chat ids via Telethon."""
-    client = TelegramClient(
-        settings.telegram_session_path,
-        settings.telegram_api_id,
-        settings.telegram_api_hash,
-    )
-    resolved: list[tuple[int, str | None, str | None]] = []
-    await client.connect()
-    try:
-        if not await client.is_user_authorized():
-            msg = "Session not authorized; run python -m scripts.create_session first"
-            raise RuntimeError(msg)
-        for ref in settings.source_channels:
-            parsed = parse_channel_ref(ref)
-            entity = await client.get_entity(parsed)
-            chat_id = int(entity.id)
-            if isinstance(entity, Channel) and chat_id > 0:
-                chat_id = int(f"-100{chat_id}")
-            username = getattr(entity, "username", None)
-            title = getattr(entity, "title", None)
-            resolved.append((chat_id, username, title))
-            logger.info(
-                "channel_resolved",
-                source_chat_id=chat_id,
-                username=username,
-            )
-    finally:
-        await client.disconnect()
-    return resolved
-
-
-async def resolve_channel_config_entries(
-    settings: Settings,
-    entries: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Resolve config/channels.yaml entries to chat ids via Telethon when needed."""
-    client = TelegramClient(
-        settings.telegram_session_path,
-        settings.telegram_api_id,
-        settings.telegram_api_hash,
-    )
-    resolved: list[dict[str, Any]] = []
-    await client.connect()
-    try:
-        if not await client.is_user_authorized():
-            msg = "Session not authorized; run python -m scripts.create_session first"
-            raise RuntimeError(msg)
-        for entry in entries:
-            chat_id = entry.get("chat_id")
-            username = entry.get("username")
-            title = entry.get("title")
-            if chat_id is None:
-                ref = username or entry.get("ref")
-                if not ref:
-                    logger.warning("channel_config_entry_skipped_missing_id")
-                    continue
-                parsed = parse_channel_ref(str(ref) if str(ref).startswith("@") else f"@{ref}")
-                entity = await client.get_entity(parsed)
-                chat_id = int(entity.id)
-                if isinstance(entity, Channel) and chat_id > 0:
-                    chat_id = int(f"-100{chat_id}")
-                username = getattr(entity, "username", None) or username
-                title = title or getattr(entity, "title", None)
-            else:
-                chat_id = int(chat_id)
-            row = {
-                "chat_id": chat_id,
-                "username": username,
-                "title": title,
-                "enabled": entry.get("enabled"),
-                "publish_mode": entry.get("publish_mode"),
-                "target_chat_id": entry.get("target_chat_id"),
-            }
-            resolved.append(row)
-            logger.info(
-                "channel_resolved",
-                source_chat_id=chat_id,
-                username=username,
-            )
-    finally:
-        await client.disconnect()
-    return resolved
-
-
 async def run_app() -> None:
     settings = get_settings()
     setup_logging(settings.log_level, json_logs=settings.app_env != "development")
@@ -148,16 +60,9 @@ async def run_app() -> None:
     auth_service = AuthService(settings, session_factory)
     await auth_service.ensure_bootstrap_admin()
 
-    from app.config_files import load_channels_config
     from app.services.rules_service import RulesService
 
-    file_entries = load_channels_config(settings.channels_config_path)
-    if file_entries:
-        rows = await resolve_channel_config_entries(settings, file_entries)
-        await channel_service.sync_from_config_rows(rows)
-    else:
-        resolved = await resolve_source_channels(settings)
-        await channel_service.sync_from_settings(resolved)
+    await channel_service.load_from_db()
 
     rules_synced = await RulesService(session_factory).sync_from_file(settings.rules_config_path)
     if rules_synced:
@@ -185,6 +90,8 @@ async def run_app() -> None:
 
     source_ids: set[int] = set()
     for chat_id in channel_service.enabled_chat_ids:
+        if is_safew_chat_id(chat_id):
+            continue
         source_ids.add(chat_id)
         s = str(chat_id)
         if s.startswith("-100"):
@@ -198,7 +105,6 @@ async def run_app() -> None:
         on_message=message_service.enqueue,
         album_wait_seconds=settings.album_wait_seconds,
         album_max_wait_seconds=settings.album_max_wait_seconds,
-        target_channel_id=settings.target_channel_id,
     )
     media_service.downloader = listener
 

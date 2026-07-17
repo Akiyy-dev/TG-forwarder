@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.config_files import load_channels_config, load_rules_config
+from app.config_files import load_rules_config
 from app.database.models import KeywordRule
 from app.rules.types import RuleType
 from app.services.rules_service import RulesService
@@ -12,12 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
-def test_load_channels_and_rules_yaml(tmp_path: Path) -> None:
-    channels = tmp_path / "channels.yaml"
-    channels.write_text(
-        "channels:\n  - chat_id: -1001\n    publish_mode: review\n    enabled: true\n",
-        encoding="utf-8",
-    )
+def test_load_rules_yaml(tmp_path: Path) -> None:
     rules = tmp_path / "rules.yaml"
     rules.write_text(
         "rules:\n"
@@ -28,9 +23,6 @@ def test_load_channels_and_rules_yaml(tmp_path: Path) -> None:
         "    enabled: true\n",
         encoding="utf-8",
     )
-    ch = load_channels_config(channels)
-    assert len(ch) == 1
-    assert ch[0]["chat_id"] == -1001
     rs = load_rules_config(rules)
     assert rs[0]["rule_type"] == "has_media"
 

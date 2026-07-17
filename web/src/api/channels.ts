@@ -62,7 +62,6 @@ export async function createChannel(body: {
   title?: string
   username?: string
   publish_mode?: string
-  target_channel_id?: number | null
   enabled?: boolean
 }): Promise<SourceChannel> {
   return apiRequest('/api/v1/channels', { method: 'POST', body: JSON.stringify(body) })
@@ -74,7 +73,6 @@ export async function patchChannel(
     title: string
     enabled: boolean
     publish_mode: string
-    target_channel_id: number | null
   }>,
 ): Promise<SourceChannel> {
   return apiRequest(`/api/v1/channels/${id}`, {

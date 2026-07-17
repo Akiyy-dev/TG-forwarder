@@ -19,8 +19,6 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Settings:
     monkeypatch.setenv("TELEGRAM_API_HASH", "0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("BOT_TOKEN", "123456:TESTTOKEN_abcdefghijklmnop")
     monkeypatch.setenv("BOT_ADMIN_IDS", "111,222")
-    monkeypatch.setenv("TARGET_CHANNEL_ID", "-1001234567890")
-    monkeypatch.setenv("SOURCE_CHANNELS", "@demo_channel,-100999")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{db_path.as_posix()}")
     monkeypatch.setenv("DOWNLOAD_DIR", str(tmp_path / "downloads"))
     monkeypatch.setenv("TEXT_REPLACEMENTS", "Foo=>Bar|old=>new")

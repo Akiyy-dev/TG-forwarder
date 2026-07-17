@@ -9,7 +9,6 @@ from aiogram import Bot, Dispatcher
 
 from app.bot.dispatcher import create_bot, create_dispatcher
 from app.config import Settings
-from app.config_files import load_channels_config
 from app.database.session import dispose_engine, init_db
 from app.entrypoints.common import install_shutdown_handlers
 from app.logging import get_logger, setup_logging
@@ -33,25 +32,21 @@ async def _accept_or_register_source(
     settings: Settings,
     channel_service: ChannelService,
 ) -> bool:
-    """Accept known sources and narrowly register trusted compatibility events."""
+    """Accept Web-managed Telegram sources and auto-register SafeW conversations."""
 
     message = event.message
     if message.source_chat_id in channel_service.configured_chat_ids:
         return True
 
-    if event.backend == "safew":
-        if not settings.safew_auto_register_sources:
-            logger.warning("unknown_safew_source_ignored", source_chat_id=message.source_chat_id)
-            return False
-    else:
-        source_origin = message.raw_metadata.get("source_registry_origin")
-        if source_origin != "legacy_config":
-            logger.warning(
-                "unknown_telegram_source_ignored",
-                source_chat_id=message.source_chat_id,
-                source_registry_origin=source_origin,
-            )
-            return False
+    if event.backend != "safew":
+        logger.warning(
+            "unknown_telegram_source_ignored",
+            source_chat_id=message.source_chat_id,
+        )
+        return False
+    if not settings.safew_auto_register_sources:
+        logger.warning("unknown_safew_source_ignored", source_chat_id=message.source_chat_id)
+        return False
 
     await channel_service.sync_from_config_rows(
         [
@@ -61,7 +56,6 @@ async def _accept_or_register_source(
                 "title": message.source_chat_title,
                 "enabled": True,
                 "publish_mode": "review",
-                "target_chat_id": settings.target_channel_id,
             }
         ]
     )
@@ -96,11 +90,6 @@ async def run() -> None:
     channel_service = ChannelService(settings, session_factory)
     await channel_service.load_from_db()
 
-    file_rows = [
-        row for row in load_channels_config(settings.channels_config_path) if row.get("chat_id")
-    ]
-    if file_rows:
-        await channel_service.sync_from_config_rows(file_rows)
     rules_synced = await RulesService(session_factory).sync_from_file(settings.rules_config_path)
     if rules_synced:
         logger.info("rules_seed_applied", count=rules_synced)

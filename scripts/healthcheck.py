@@ -94,7 +94,6 @@ async def _check_telegram_session() -> list[str]:
 
 async def _check_bot() -> list[str]:
     bot_token = os.environ.get("BOT_TOKEN")
-    target = os.environ.get("TARGET_CHANNEL_ID")
     if not bot_token:
         return ["bot_token_missing"]
 
@@ -107,14 +106,6 @@ async def _check_bot() -> list[str]:
         errors: list[str] = []
         if not me.username:
             errors.append("bot_invalid")
-        if target:
-            try:
-                member = await bot.get_chat_member(int(target), me.id)
-                status = getattr(member, "status", None)
-                if status not in {"administrator", "creator"}:
-                    errors.append("bot_not_admin_in_target")
-            except Exception:
-                errors.append("bot_cannot_access_target")
         return errors
     except Exception as exc:
         return [f"bot_check: {type(exc).__name__}"]

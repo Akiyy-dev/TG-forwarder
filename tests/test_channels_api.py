@@ -10,7 +10,7 @@ from app.auth.roles import Role
 from app.auth.service import AuthService
 from app.config import Settings
 from app.context import AppContext
-from app.database.models import ProcessedMessage, ReviewTask
+from app.database.models import ProcessedMessage, ReviewTask, SourceChannel
 from app.listeners.safew_notifications import safew_chat_id
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.schemas.channel import PublishMode
@@ -136,12 +136,13 @@ async def test_publish_mode_review_and_paused(
     bot.send_message = AsyncMock(return_value=MagicMock(message_id=7))
     publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
     ctx = _ctx(settings_env, session_factory, publisher=publisher)
+    target = await ctx.channel_service.create_target({"chat_id": -100302, "title": "review-target"})
     await ctx.channel_service.create_source(
         {
             "chat_id": -100301,
             "title": "review-src",
             "publish_mode": PublishMode.REVIEW.value,
-            "target_channel_id": -100302,
+            "target_ids": [target.id],
         }
     )
     msg = NormalizedMessage(
@@ -206,12 +207,13 @@ async def test_disabled_targets_are_excluded_and_message_fails_without_retry(
     publisher = TelegramPublisher(bot, max_retries=1, base_delay=0.01)
     ctx = _ctx(settings_env, session_factory, publisher=publisher)
 
-    # An unregistered global target remains a supported legacy fallback.
-    assert ctx.channel_service.get_targets_for(-100909) == [settings_env.target_channel_id]
+    # Unregistered sources never inherit an environment target.
+    assert ctx.channel_service.get_targets_for(-100909) == []
 
+    default_target_chat_id = -1001234567890
     default_target = await ctx.channel_service.create_target(
         {
-            "chat_id": settings_env.target_channel_id,
+            "chat_id": default_target_chat_id,
             "title": "disabled default",
             "enabled": False,
         }
@@ -266,6 +268,27 @@ async def test_disabled_targets_are_excluded_and_message_fails_without_retry(
         assert record.error_message == "no enabled target channel configured"
         assert record.retry_count == 0
     bot.send_message.assert_not_awaited()
+
+
+async def test_unlinked_primary_target_column_is_not_a_routing_fallback(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = ChannelService(settings_env, session_factory)
+    target = await service.create_target({"chat_id": -100490, "title": "registered target"})
+    async with session_factory() as session:
+        source = SourceChannel(
+            chat_id=-100491,
+            title="stale source",
+            enabled=True,
+            target_channel_id=target.chat_id,
+        )
+        session.add(source)
+        await session.commit()
+
+    await service.load_from_db()
+
+    assert service.get_targets_for(source.chat_id) == []
 
 
 async def test_queued_message_from_disabled_source_fails_without_publish_or_retry(
@@ -401,7 +424,7 @@ async def test_delete_target_recomputes_and_clears_legacy_primary(
     assert service.get_target_for(source.chat_id) is None
 
 
-async def test_delete_last_telegram_source_with_legacy_fallback_requires_disable(
+async def test_delete_last_telegram_source_does_not_resurrect_from_environment(
     settings_env: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -414,13 +437,10 @@ async def test_delete_last_telegram_source_with_legacy_fallback_requires_disable
 
     await service.delete_source(first.id)
 
-    with pytest.raises(ChannelServiceError, match="disable it instead") as exc_info:
-        await service.delete_source(last.id)
-    assert exc_info.value.code == "conflict"
-    assert (await service.get_source(last.id)).enabled is True
-
-    await service.update_source(last.id, {"enabled": False})
-    assert (await service.get_source(last.id)).enabled is False
+    await service.delete_source(last.id)
+    with pytest.raises(ChannelServiceError) as deleted_telegram:
+        await service.get_source(last.id)
+    assert deleted_telegram.value.code == "not_found"
 
     # SafeW sources do not act as Telegram tombstones and remain independently deletable.
     await service.delete_source(safew.id)
