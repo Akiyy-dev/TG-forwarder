@@ -13,6 +13,7 @@ from app.api.pagination import PageParams, build_page
 from app.api.schemas import APIModel, Envelope
 from app.context import AppContext
 from app.schemas.channel import PublishMode
+from app.services.api_delivery_service import ApiDeliveryService
 from app.services.channel_service import ChannelServiceError
 from app.source_backends import source_backend_for_chat_id
 
@@ -36,6 +37,7 @@ class SourceChannelOut(APIModel):
     publish_mode: str
     target_channel_id: int | None = None
     target_ids: list[int] = Field(default_factory=list)
+    api_endpoint_ids: list[int] = Field(default_factory=list)
     access_status: str = "unknown"
     processing_profile: str
     created_at: Any = None
@@ -99,6 +101,10 @@ class LinkTargetsRequest(APIModel):
     target_ids: list[int] = Field(default_factory=list)
 
 
+class LinkApiEndpointsRequest(APIModel):
+    api_endpoint_ids: list[int] = Field(default_factory=list)
+
+
 class LinkSourcesRequest(APIModel):
     source_ids: list[int] = Field(default_factory=list)
 
@@ -125,9 +131,11 @@ def _map_err(exc: ChannelServiceError) -> AppError:
 
 async def _source_out(ctx: AppContext, row: Any) -> SourceChannelOut:
     target_ids = await ctx.channel_service.get_linked_target_ids(row.id)
+    api_endpoint_ids = await ApiDeliveryService(ctx.session_factory).linked_endpoint_ids(row.id)
     return SourceChannelOut.model_validate(row).model_copy(
         update={
             "target_ids": target_ids,
+            "api_endpoint_ids": api_endpoint_ids,
             "access_status": getattr(row, "access_status", "unknown") or "unknown",
             "source_backend": source_backend_for_chat_id(int(row.chat_id)),
         }
@@ -298,6 +306,24 @@ async def put_channel_targets(
     except ChannelServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data={"target_ids": target_ids, "target_chat_ids": chat_ids})
+
+
+@router.put("/channels/{source_id}/api-endpoints", response_model=Envelope[dict[str, Any]])
+async def put_channel_api_endpoints(
+    source_id: int,
+    body: LinkApiEndpointsRequest,
+    _admin: SuperAdminUser,
+    ctx: Annotated[AppContext, Depends(get_ctx)],
+) -> Envelope[dict[str, Any]]:
+    try:
+        endpoint_ids = await ApiDeliveryService(ctx.session_factory).set_source_endpoints(
+            source_id, body.api_endpoint_ids
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if message == "source channel not found" else 422
+        raise AppError("validation_error", message, status_code=status_code) from exc
+    return Envelope(data={"api_endpoint_ids": endpoint_ids})
 
 
 @router.delete("/channels/{source_id}", response_model=Envelope[dict[str, Any]])

@@ -25,6 +25,7 @@ from app.schemas.message import (
     ProcessAction,
     ProcessingContext,
 )
+from app.services.api_delivery_service import ApiDeliveryService
 from app.services.channel_service import ChannelService
 from app.services.history_service import HistoryService
 from app.services.media_service import MediaService
@@ -60,6 +61,7 @@ class MessageService:
         self.publisher = publisher
         self.media_service = media_service
         self.review_service = review_service or ReviewService(session_factory)
+        self.api_delivery = ApiDeliveryService(session_factory)
         self.history = HistoryService()
         self.queue: asyncio.Queue[QueueItem | None] = asyncio.Queue(maxsize=settings.queue_maxsize)
         self._channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -107,13 +109,14 @@ class MessageService:
         self,
         source_chat_id: int,
         targets: list[int],
+        has_api_target: bool = False,
     ) -> str | None:
         if (
             source_chat_id in self.channel_service.configured_chat_ids
             and not self.channel_service.is_enabled(source_chat_id)
         ):
             return SOURCE_DISABLED
-        if not targets:
+        if not targets and not has_api_target:
             return NO_ENABLED_TARGET
         return None
 
@@ -124,7 +127,8 @@ class MessageService:
         """Reload routing and return only destinations that are still publishable."""
         await self.channel_service.load_from_db()
         targets = self._resolve_targets(message)
-        reason = self._routing_block_reason(message.source_chat_id, targets)
+        api_endpoint_ids = await self.api_delivery.active_endpoint_ids(message.source_chat_id)
+        reason = self._routing_block_reason(message.source_chat_id, targets, bool(api_endpoint_ids))
         if reason == SOURCE_DISABLED:
             targets = []
         message.target_chat_ids = list(targets)
@@ -286,7 +290,7 @@ class MessageService:
             if record is None:
                 await session.commit()
                 return
-            if record.status == MessageStatus.PUBLISHED.value and record.target_message_ids:
+            if record.status == MessageStatus.PUBLISHED.value:
                 await session.commit()
                 return
             if routing_block is not None:
@@ -328,7 +332,10 @@ class MessageService:
             await session.commit()
             record_id = record.id
 
-        target = targets[0]
+        # Processing rules historically receive a Telegram destination. API-only
+        # sources use 0 as a neutral context value; delivery routing is handled
+        # independently after processing has completed.
+        target = targets[0] if targets else 0
 
         original_text = message.text or ""
 
@@ -431,6 +438,9 @@ class MessageService:
                 )
                 await session.commit()
                 detail = result.detail if isinstance(result.detail, dict) else {}
+                api_endpoint_ids = await self.api_delivery.active_endpoint_ids(
+                    message.source_chat_id
+                )
                 await self.review_service.create_from_message(
                     processed=record,
                     original_text=original_text,
@@ -438,6 +448,7 @@ class MessageService:
                     decision_reason=decision_reason,
                     matched_rules=list(detail.get("matched_rules") or []),
                     detected_keywords=list(detail.get("detected_keywords") or []),
+                    target_api_endpoint_ids=api_endpoint_ids,
                 )
                 self.history.write(
                     source_chat_id=message.source_chat_id,
@@ -476,7 +487,7 @@ class MessageService:
             )
             return
 
-        await self._publish(result.message or message, target, record_id)
+        await self._publish(result.message or message, record_id)
 
     async def process_durable(self, message: NormalizedMessage) -> None:
         """Process a stream event before its external acknowledgement.
@@ -492,11 +503,11 @@ class MessageService:
     async def _publish(
         self,
         message: NormalizedMessage,
-        target: int,
         record_id: int,
     ) -> None:
         try:
             targets, routing_block = await self._refresh_routing(message)
+            api_endpoint_ids = await self.api_delivery.active_endpoint_ids(message.source_chat_id)
         except Exception as exc:
             await self._mark_failed(message, exc, record_id, increment_retry=True)
             return
@@ -521,7 +532,7 @@ class MessageService:
             record = await repo.get_by_source(message.source_chat_id, message.source_message_id)
             if record is None:
                 return
-            if record.target_message_ids:
+            if record.status == MessageStatus.PUBLISHED.value:
                 await session.commit()
                 return
             await repo.update_status(record, MessageStatus.PUBLISHING.value)
@@ -531,7 +542,17 @@ class MessageService:
             ids: list[int] = []
             published_targets: list[int] = []
             last_exc: BaseException | None = None
-            success = 0
+            try:
+                delivered_api_ids = await self.api_delivery.enqueue(
+                    source_chat_id=message.source_chat_id,
+                    processed_message_id=record_id,
+                    message=message,
+                    endpoint_ids=api_endpoint_ids,
+                )
+            except Exception as exc:  # noqa: BLE001
+                delivered_api_ids = []
+                last_exc = exc
+            success = len(delivered_api_ids)
             routing_failure: str | None = None
             for t in targets:
                 current_targets, current_block = await self._refresh_routing(message)
@@ -577,8 +598,9 @@ class MessageService:
                 "status": MessageStatus.PUBLISHED.value,
                 "text": message.text,
                 "media_type": message.media_type.value,
-                "target_chat_ids": published_targets or [target],
+                "target_chat_ids": published_targets,
                 "target_message_ids": ids,
+                "api_endpoint_ids": delivered_api_ids,
             },
         )
 

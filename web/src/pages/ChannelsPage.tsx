@@ -18,6 +18,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { ApiError } from '../api/client'
+import { listApiEndpoints } from '../api/apiEndpoints'
 import {
   addFromAccount,
   checkTargetPermissions,
@@ -32,6 +33,7 @@ import {
   refreshChannels,
   sendTargetTestMessage,
   setChannelTargets,
+  setChannelApiEndpoints,
   setTargetSources,
 } from '../api/channels'
 import { SourceBackendBadge } from '../components/SourceBackendBadge'
@@ -72,6 +74,10 @@ export function ChannelsPage() {
     queryKey: ['targets'],
     queryFn: () => listTargets(),
   })
+  const apiEndpoints = useQuery({
+    queryKey: ['api-endpoints'],
+    queryFn: () => listApiEndpoints(),
+  })
   const account = useQuery({
     queryKey: ['account-channels'],
     queryFn: () => listAccountChannels(),
@@ -93,6 +99,14 @@ export function ChannelsPage() {
         label: `${sourceBackendLabel(s.source_backend)} · ${s.title || s.username || String(s.chat_id)}`,
       })),
     [sources.data],
+  )
+  const apiEndpointOptions = useMemo(
+    () =>
+      (apiEndpoints.data?.items ?? []).map((endpoint) => ({
+        value: String(endpoint.id),
+        label: endpoint.name,
+      })),
+    [apiEndpoints.data],
   )
 
   const createSourceMut = useMutation({
@@ -185,7 +199,7 @@ export function ChannelsPage() {
       <Tabs defaultValue="sources">
         <Tabs.List>
           <Tabs.Tab value="sources">来源频道</Tabs.Tab>
-          <Tabs.Tab value="targets">目标频道</Tabs.Tab>
+          <Tabs.Tab value="targets">Telegram 目标</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="sources" pt="md">
@@ -203,7 +217,7 @@ export function ChannelsPage() {
                   <Table.Th>聊天 ID</Table.Th>
                   <Table.Th>可达</Table.Th>
                   <Table.Th>发布模式</Table.Th>
-                  <Table.Th>目标</Table.Th>
+                  <Table.Th>目标（TG / API）</Table.Th>
                   <Table.Th>启用</Table.Th>
                   {isAdmin && <Table.Th>操作</Table.Th>}
                 </Table.Tr>
@@ -249,27 +263,47 @@ export function ChannelsPage() {
                     </Table.Td>
                     <Table.Td style={{ minWidth: 220 }}>
                       {isAdmin ? (
-                        <MultiSelect
-                          data={targetOptions}
-                          value={(ch.target_ids ?? []).map(String)}
-                          placeholder="绑定目标"
-                          searchable
-                          onChange={(vals) => {
-                            void setChannelTargets(
-                              ch.id,
-                              vals.map(Number),
-                            )
-                              .then(() => {
-                                void qc.invalidateQueries({ queryKey: ['channels'] })
-                                void qc.invalidateQueries({ queryKey: ['targets'] })
-                              })
-                              .catch((err: unknown) =>
-                                setMsg(err instanceof ApiError ? err.message : '绑定失败'),
-                              )
-                          }}
-                        />
+                        <Stack gap={6}>
+                          <MultiSelect
+                            label="Telegram"
+                            data={targetOptions}
+                            value={(ch.target_ids ?? []).map(String)}
+                            placeholder="绑定 Telegram 目标"
+                            searchable
+                            onChange={(vals) => {
+                              void setChannelTargets(ch.id, vals.map(Number))
+                                .then(() => {
+                                  void qc.invalidateQueries({ queryKey: ['channels'] })
+                                  void qc.invalidateQueries({ queryKey: ['targets'] })
+                                })
+                                .catch((err: unknown) =>
+                                  setMsg(err instanceof ApiError ? err.message : '绑定失败'),
+                                )
+                            }}
+                          />
+                          <MultiSelect
+                            label="API"
+                            data={apiEndpointOptions}
+                            value={(ch.api_endpoint_ids ?? []).map(String)}
+                            placeholder="绑定 API 目标"
+                            searchable
+                            onChange={(vals) => {
+                              void setChannelApiEndpoints(ch.id, vals.map(Number))
+                                .then(() => {
+                                  void qc.invalidateQueries({ queryKey: ['channels'] })
+                                  void qc.invalidateQueries({ queryKey: ['api-endpoints'] })
+                                })
+                                .catch((err: unknown) =>
+                                  setMsg(err instanceof ApiError ? err.message : '绑定失败'),
+                                )
+                            }}
+                          />
+                        </Stack>
                       ) : (
-                        <Text size="sm">{(ch.target_ids ?? []).join(', ') || '-'}</Text>
+                        <Text size="sm">
+                          TG {(ch.target_ids ?? []).join(', ') || '-'} / API{' '}
+                          {(ch.api_endpoint_ids ?? []).join(', ') || '-'}
+                        </Text>
                       )}
                     </Table.Td>
                     <Table.Td>

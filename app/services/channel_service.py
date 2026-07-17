@@ -5,11 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.database.models import SourceChannel, SourceTargetLink, TargetChannel
+from app.database.models import (
+    SourceApiEndpointLink,
+    SourceChannel,
+    SourceTargetLink,
+    TargetChannel,
+)
 from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
 from app.schemas.channel import PublishMode, SourceChannelConfig
@@ -384,6 +389,9 @@ class ChannelService:
             source = await session.get(SourceChannel, source_id)
             if source is None:
                 raise ChannelServiceError("source channel not found", code="not_found")
+            await session.execute(
+                delete(SourceApiEndpointLink).where(SourceApiEndpointLink.source_id == source_id)
+            )
             await session.delete(source)
             await session.flush()
             await session.commit()

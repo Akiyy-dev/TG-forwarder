@@ -4,8 +4,10 @@ import { Link, useLocation } from 'react-router-dom'
 const items = [
   { label: '仪表盘', to: '/dashboard' },
   { label: '审核队列', to: '/reviews' },
+  { label: '消息历史', to: '/history' },
   { label: '规则管理', to: '/rules' },
   { label: '频道管理', to: '/channels' },
+  { label: '对外 API', to: '/api-endpoints' },
   { label: '设置', to: '/settings/basic' },
   { label: '系统状态', to: '/system' },
   { label: '系统日志', to: '/logs' },
@@ -16,7 +18,7 @@ const settingChildren = [
   { label: '监听与队列', to: '/settings/listener' },
   { label: '规则与处理器', to: '/settings/processors' },
   { label: '审核', to: '/settings/review' },
-  { label: '历史', to: '/settings/history' },
+  { label: '历史落盘', to: '/settings/history' },
   { label: 'Web', to: '/settings/web' },
 ]
 

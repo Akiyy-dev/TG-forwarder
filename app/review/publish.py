@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.database.models import ProcessedMessage, ReviewTask
 from app.database.repositories.message_repo import MessageRepository
 from app.logging import get_logger
+from app.messaging.models import message_to_dict
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.service import ReviewService
 from app.review.state_machine import ReviewActionType, ReviewStatus
 from app.schemas.message import MediaItem, MediaType, MessageStatus, NormalizedMessage
+from app.services.api_delivery_service import ApiDeliveryService
 from app.services.channel_service import ChannelService
 from app.services.media_service import MediaService
 from app.services.retry_service import exception_summary
@@ -65,6 +67,7 @@ class ReviewPublishService:
         self.publisher = publisher
         self.media_service = media_service
         self.channel_service = channel_service
+        self.api_delivery = ApiDeliveryService(session_factory)
 
     def _message_from_task(self, task: ReviewTask) -> NormalizedMessage:
         return message_from_task(task)
@@ -109,13 +112,25 @@ class ReviewPublishService:
             return [target for target in candidates if target in active_bindings]
         return []
 
-    def _routing_block_reason(self, task: ReviewTask, targets: list[int]) -> str | None:
+    async def _current_api_targets(
+        self,
+        task: ReviewTask,
+        snapshot_targets: list[int],
+    ) -> list[int]:
+        return await self.api_delivery.active_endpoint_ids(task.source_chat_id, snapshot_targets)
+
+    def _routing_block_reason(
+        self,
+        task: ReviewTask,
+        targets: list[int],
+        api_targets: list[int] | None = None,
+    ) -> str | None:
         if (
             task.source_chat_id in self.channel_service.configured_chat_ids
             and not self.channel_service.is_enabled(task.source_chat_id)
         ):
             return REVIEW_SOURCE_DISABLED
-        if not targets:
+        if not targets and not api_targets:
             return NO_CURRENT_REVIEW_TARGET
         return None
 
@@ -179,11 +194,12 @@ class ReviewPublishService:
             snapshot_targets = [int(x) for x in claimed.target_chat_ids if x is not None]
         elif claimed.target_chat_id is not None:
             snapshot_targets = [int(claimed.target_chat_id)]
+        snapshot_api_targets = [int(value) for value in (claimed.target_api_endpoint_ids or [])]
 
         # Ensure processed_message not already published (idempotency)
         async with self.session_factory() as session:
             processed = await session.get(ProcessedMessage, claimed.processed_message_id)
-            if processed and processed.target_message_ids:
+            if processed and processed.status == MessageStatus.PUBLISHED.value:
                 await self.review_service.transition(
                     claimed.id,
                     ReviewStatus.PUBLISHED,
@@ -200,6 +216,7 @@ class ReviewPublishService:
 
         try:
             targets = await self._current_targets(claimed, snapshot_targets)
+            api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
         except Exception as exc:  # noqa: BLE001
             summary = exception_summary(exc)
             logger.warning(
@@ -215,7 +232,7 @@ class ReviewPublishService:
                 increment_retry=True,
             )
 
-        routing_block = self._routing_block_reason(claimed, targets)
+        routing_block = self._routing_block_reason(claimed, targets, api_targets)
         if routing_block is not None:
             error_message = routing_block
             logger.warning(
@@ -231,6 +248,7 @@ class ReviewPublishService:
                 detail={
                     "stage": "target_validation",
                     "snapshot_target_chat_ids": snapshot_targets,
+                    "snapshot_api_endpoint_ids": snapshot_api_targets,
                 },
             )
 
@@ -242,11 +260,16 @@ class ReviewPublishService:
                 await session.commit()
 
         try:
-            message = await self.ensure_task_media(claimed)
+            message = (
+                await self.ensure_task_media(claimed)
+                if targets
+                else self._message_from_task(claimed)
+            )
             # Media recovery may take long enough for a source, target, or link
             # to be disabled. Re-resolve after it completes before sending.
             targets = await self._current_targets(claimed, snapshot_targets)
-            routing_block = self._routing_block_reason(claimed, targets)
+            api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
+            routing_block = self._routing_block_reason(claimed, targets, api_targets)
             if routing_block is not None:
                 return await self._fail_claimed_task(
                     claimed,
@@ -255,22 +278,47 @@ class ReviewPublishService:
                     detail={
                         "stage": "post_media_target_validation",
                         "snapshot_target_chat_ids": snapshot_targets,
+                        "snapshot_api_endpoint_ids": snapshot_api_targets,
                     },
                 )
             message.target_chat_ids = list(targets)
-            message.target_chat_id = targets[0]
+            message.target_chat_id = targets[0] if targets else None
             all_ids: list[int] = []
             per_target: dict[str, Any] = {}
             errors: list[dict[str, Any]] = []
             routing_errors: list[dict[str, Any]] = []
             send_errors: list[dict[str, Any]] = []
-            published_count = 0
+            try:
+                delivered_api_ids = await self.api_delivery.enqueue(
+                    source_chat_id=claimed.source_chat_id,
+                    processed_message_id=claimed.processed_message_id,
+                    message=message,
+                    endpoint_ids=api_targets,
+                    review_task_id=claimed.id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                delivered_api_ids = []
+                summary = exception_summary(exc)
+                for endpoint_id in api_targets:
+                    error = {"api_endpoint_id": endpoint_id, **summary}
+                    per_target[f"api:{endpoint_id}"] = {
+                        "ok": False,
+                        "error": summary,
+                    }
+                    errors.append(error)
+                    send_errors.append(error)
+            published_count = len(delivered_api_ids)
+            for endpoint_id in delivered_api_ids:
+                per_target[f"api:{endpoint_id}"] = {"ok": True}
             for target in targets:
                 # Minimise the validation-to-send window for multi-target tasks:
                 # each destination must still be enabled and bound immediately
                 # before its individual Telegram API call.
                 current_targets = await self._current_targets(claimed, snapshot_targets)
-                current_block = self._routing_block_reason(claimed, current_targets)
+                current_api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
+                current_block = self._routing_block_reason(
+                    claimed, current_targets, current_api_targets
+                )
                 if current_block == REVIEW_SOURCE_DISABLED:
                     summary = {
                         "exception_type": "RoutingChanged",
@@ -321,7 +369,11 @@ class ReviewPublishService:
             if published_count == 0:
                 raise RuntimeError(errors[0]["message"] if errors else "publish failed")
             ids = all_ids
-            publish_detail = {"target_message_ids": ids, "per_target": per_target}
+            publish_detail = {
+                "target_message_ids": ids,
+                "api_endpoint_ids": delivered_api_ids,
+                "per_target": per_target,
+            }
             if errors:
                 publish_detail["partial_errors"] = errors
         except Exception as exc:
@@ -369,6 +421,10 @@ class ReviewPublishService:
                     processed,
                     MessageStatus.PUBLISHED.value,
                     target_message_ids=ids,
+                    processing_result={
+                        **message_to_dict(message),
+                        "publish_mode": "review",
+                    },
                 )
                 await session.commit()
         self.media_service.cleanup_message_files(message)

@@ -93,6 +93,47 @@ class SourceTargetLink(Base):
     )
 
 
+class ApiEndpoint(Base):
+    """Token-authenticated pull destination for processed messages."""
+
+    __tablename__ = "api_endpoints"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_access_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class SourceApiEndpointLink(Base):
+    __tablename__ = "source_api_endpoint_links"
+    __table_args__ = (
+        UniqueConstraint("source_id", "api_endpoint_id", name="uq_source_api_endpoint_link"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("source_channels.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    api_endpoint_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("api_endpoints.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ProcessedMessage(Base):
     __tablename__ = "processed_messages"
     __table_args__ = (
@@ -130,6 +171,36 @@ class ProcessedMessage(Base):
     )
 
     logs: Mapped[list[ProcessingLog]] = relationship(back_populates="message", cascade="all")
+
+
+class ApiDelivery(Base):
+    __tablename__ = "api_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "api_endpoint_id",
+            "processed_message_id",
+            name="uq_api_delivery_endpoint_message",
+        ),
+        Index("ix_api_deliveries_endpoint_cursor", "api_endpoint_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    api_endpoint_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("api_endpoints.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    processed_message_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("processed_messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    review_task_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("review_tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ProcessingLog(Base):
@@ -219,6 +290,7 @@ class ReviewTask(Base):
     source_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     target_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_chat_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    target_api_endpoint_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     original_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     processed_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     final_text: Mapped[str] = mapped_column(Text, nullable=False, default="")

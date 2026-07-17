@@ -11,6 +11,7 @@ export interface SourceChannel {
   publish_mode: string
   target_channel_id: number | null
   target_ids: number[]
+  api_endpoint_ids: number[]
   access_status: string
   processing_profile: string
   created_at?: string | null
@@ -88,6 +89,16 @@ export async function setChannelTargets(id: number, target_ids: number[]): Promi
   return apiRequest(`/api/v1/channels/${id}/targets`, {
     method: 'PUT',
     body: JSON.stringify({ target_ids }),
+  })
+}
+
+export async function setChannelApiEndpoints(
+  id: number,
+  api_endpoint_ids: number[],
+): Promise<{ api_endpoint_ids: number[] }> {
+  return apiRequest(`/api/v1/channels/${id}/api-endpoints`, {
+    method: 'PUT',
+    body: JSON.stringify({ api_endpoint_ids }),
   })
 }
 

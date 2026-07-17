@@ -16,9 +16,9 @@ Telegram Bot 发布到目标频道。
 Compose 架构：
 
 ```text
-Telegram 用户账号 ─┐
-                   ├─> Redis ─> sender ─> Telegram 目标频道
-SafeW 桌面通知 ────┘               ↑
+Telegram 用户账号 ─┐                         ┌─> Telegram 目标频道
+                   ├─> Redis ─> sender ─────┤
+SafeW 桌面通知 ────┘               ↑         └─> 带 Token 的对外 API
                                    │
 浏览器 ─> web ─> PostgreSQL ───────┘
 ```
@@ -91,7 +91,20 @@ Bot 管理命令包括 `/status`、`/sources`、`/stats`、`/retry_failed`、
 `/pause` 和 `/resume`。Web 面板提供来源、规则、审核队列和运行状态管理。
 Telegram 来源、Telegram 目标以及二者的绑定关系只保存在 PostgreSQL/SQLite 中，统一在
 Web 的“频道管理”页面配置；`.env` 与 `config/channels.yaml` 不再参与频道路由。SafeW
-捕获到的新会话会自动加入来源列表，但仍需在 Web 中绑定目标。
+捕获到的新会话会自动加入来源列表，但仍需在 Web 中绑定目标。“消息历史”显示所有处理
+记录，不受审核队列或可选历史落盘开关影响。
+
+“对外 API”可创建带独立 Token、启用状态和过期时间的拉取目标，并绑定允许接收的来源。
+也可以在“频道管理”的来源行中绑定 API 目标。客户端使用以下方式增量读取已经完成规则
+与审核流程的消息；`next_cursor` 应由客户端持久化并用于下一次请求：
+
+```bash
+curl -H 'Authorization: Bearer YOUR_TOKEN' \
+  'https://your-host/api/public/v1/messages?cursor=0&limit=50'
+```
+
+Token 只在创建或重置时显示一次，服务端仅保存 SHA-256 哈希。重置 Token 会立即使旧
+Token 失效；停用或到期的 API 目标不能继续拉取，也不会接收新的消息。
 如果同一个 Bot Token 还被其他程序监听，请设置 `BOT_POLLING_ENABLED=false`，避免
 Telegram `getUpdates` 冲突；这只会关闭上述管理命令，不影响消息发布。
 

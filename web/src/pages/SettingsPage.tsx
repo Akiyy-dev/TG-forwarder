@@ -130,9 +130,10 @@ export function SettingsPage() {
                 label={`${label}（${f.apply}）`}
                 checked={Boolean(value)}
                 disabled={f.readonly || !isAdmin}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, [f.key]: e.currentTarget.checked }))
-                }
+                onChange={(e) => {
+                  const checked = e.currentTarget.checked
+                  setDraft((d) => ({ ...d, [f.key]: checked }))
+                }}
               />
             )
           }
@@ -153,9 +154,10 @@ export function SettingsPage() {
               label={`${label}（${f.apply}）`}
               value={String(value ?? '')}
               disabled={f.readonly || !isAdmin}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, [f.key]: e.currentTarget.value }))
-              }
+              onChange={(e) => {
+                const value = e.currentTarget.value
+                setDraft((d) => ({ ...d, [f.key]: value }))
+              }}
             />
           )
         })}
