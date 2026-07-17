@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.3...v0.4.0) (2026-07-17)
+
+
+### Features
+
+* manage channels exclusively through web ([2e3ae7e](https://github.com/Akiyy-dev/TG-forwarder/commit/2e3ae7e7e1e935e3505b321067e59b7575786523))
+
 ## [0.3.3](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.3.2...v0.3.3) (2026-07-17)
 
 
