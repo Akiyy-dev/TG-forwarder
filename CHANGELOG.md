@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.4.1...v0.5.0) (2026-07-20)
+
+
+### Features
+
+* add SafeW bot publishing targets ([5013dbb](https://github.com/Akiyy-dev/TG-forwarder/commit/5013dbbec79cb9049860e08d4fa5cb9b23276410))
+
 ## [0.4.1](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.4.0...v0.4.1) (2026-07-17)
 
 
