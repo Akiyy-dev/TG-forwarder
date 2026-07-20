@@ -20,6 +20,7 @@ export interface SourceChannel {
 
 export interface TargetChannel {
   id: number
+  target_backend: 'telegram' | 'safew'
   chat_id: number
   username: string | null
   title: string | null
@@ -102,6 +103,20 @@ export async function setChannelApiEndpoints(
   })
 }
 
+export async function setChannelDestinations(
+  id: number,
+  body: { target_ids: number[]; api_endpoint_ids: number[] },
+): Promise<{
+  target_ids: number[]
+  target_chat_ids: number[]
+  api_endpoint_ids: number[]
+}> {
+  return apiRequest(`/api/v1/channels/${id}/destinations`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
 export async function deleteChannel(id: number): Promise<void> {
   await apiRequest(`/api/v1/channels/${id}`, { method: 'DELETE' })
 }
@@ -112,6 +127,7 @@ export async function listTargets(): Promise<{ items: TargetChannel[] }> {
 
 export async function createTarget(body: {
   chat_id: number
+  target_backend?: 'telegram' | 'safew'
   title?: string
   username?: string
   enabled?: boolean

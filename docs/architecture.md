@@ -8,7 +8,7 @@ TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开�
 - 接收端尽快把事件持久化到 Redis，避免长时间处理阻塞监听；
 - 同一来源内按顺序处理，跨来源可并发；
 - 规则、审核和目标路由以数据库为准；
-- Telegram 与 API 目标互不依赖，支持部分成功；
+- Telegram、SafeW Bot 与 API 目标互不依赖，支持部分成功；
 - 已处理消息、审核操作和规则执行均可追溯。
 
 ## 2. 组件
@@ -18,7 +18,7 @@ TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开�
 | 服务 | 职责 | 不能做的事 |
 | --- | --- | --- |
 | `web` | FastAPI、React 静态页面、用户认证、管理 API、发布命令 | 不直接监听 Telegram，不直接调用 Bot 发布 |
-| `sender` | 处理器、规则、审核发布、Telegram Bot、API 投递、恢复任务 | 不运行 SafeW 桌面，不维护 Telegram 用户监听连接 |
+| `sender` | 处理器、规则、审核发布、Telegram/SafeW Bot、API 投递、恢复任务 | 不运行 SafeW 桌面，不维护 Telegram 用户监听连接 |
 | `telegram-receiver` | Telethon 用户会话、来源过滤、相册聚合、媒体下载 | 不执行最终规则和目标发布 |
 | `safew-receiver` | SafeW 桌面、D-Bus 通知捕获、来源标题和正文提取 | 不读取 SafeW 历史或官方 User API |
 
@@ -59,7 +59,7 @@ Browser ── HTTP ──> web ── command stream ────────�
                                                                     │
                                       ┌─────────────────────────────┴────────┐
                                       v                                      v
-                              Telegram Bot 目标                        API deliveries
+                         Telegram / SafeW Bot 目标                      API deliveries
 ```
 
 Redis consumer group 使用显式确认。sender 处理失败时事件留在 pending 状态；超过 claim idle
@@ -90,7 +90,7 @@ SafeW 通知以会话标题映射为内部来源。启用 `SAFEW_AUTO_REGISTER_S
 
 一个来源可绑定：
 
-- 零个或多个 Telegram 目标；
+- 零个或多个 Telegram/SafeW Bot 目标；
 - 零个或多个 API 目标。
 
 目标在真正发布前会再次从数据库验证。已停用、已解绑、过期或来源被停用的目标不会接收
@@ -152,7 +152,7 @@ publishing ───────────────> published
 
 - 原文、规则处理文本和最终文本；
 - 媒体快照；
-- Telegram 目标快照；
+- Telegram/SafeW 目标记录 ID 与聊天 ID 快照；
 - API 目标快照；
 - 规则匹配、关键词和决策原因；
 - revision 版本号。
@@ -205,7 +205,7 @@ Web 的系统状态读取这些心跳，并区分“队列确实为空”和“R
 ## 11. 安全边界
 
 - Telegram 用户 Session 只在接收端使用；
-- Telegram Bot Token 只在 sender 使用；
+- Telegram Bot Token 与 SafeW Bot Token 只在 sender 使用；
 - SafeW 登录资料只在 SafeW 卷中；
 - Web 密钥与管理员哈希只在 Web 使用；
 - 公共 API Token 只以哈希形式保存在 PostgreSQL；

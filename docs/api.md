@@ -109,7 +109,7 @@ cursor = data["next_cursor"]
 - API 目标停用、过期或已从来源解绑：不会接收新的消息；
 - 绑定 API 目标之前的历史消息不会自动回填。
 
-Telegram 目标发布失败但 API 投递成功时，处理结果可能属于“部分成功”；反之亦然。系统会
+Telegram/SafeW 目标发布失败但 API 投递成功时，处理结果可能属于“部分成功”；反之亦然。系统会
 尽量避免一个目标故障阻断其他目标，具体结果应结合消息历史和 sender 日志核对。
 
 ### 1.4 消息字段
@@ -252,6 +252,19 @@ curl -b cookies.txt https://example.com/api/v1/channels
 | `PUT` | `/api/v1/api-endpoints/{id}/sources` | 替换允许接收的来源列表 |
 | `DELETE` | `/api/v1/api-endpoints/{id}` | 删除目标及其未拉取/历史投递记录 |
 | `PUT` | `/api/v1/channels/{source_id}/api-endpoints` | 从来源侧替换 API 目标绑定 |
+| `PUT` | `/api/v1/channels/{source_id}/destinations` | 一次替换机器人与 API 目标绑定 |
+
+统一绑定请求：
+
+```json
+{
+  "target_ids": [1, 2],
+  "api_endpoint_ids": [3]
+}
+```
+
+`target_ids` 可同时引用 `target_backend=telegram` 与 `target_backend=safew` 的发送目标；旧的
+`/targets` 和 `/api-endpoints` 绑定接口继续保留兼容。
 
 创建示例：
 
@@ -287,7 +300,7 @@ curl -b cookies.txt https://example.com/api/v1/channels
 | 仪表盘 | `GET /api/v1/dashboard` | viewer |
 | 消息历史 | `GET /api/v1/history` | viewer |
 | 来源频道 | `/api/v1/channels*` | 查看 viewer，修改 super_admin |
-| Telegram 目标 | `/api/v1/targets*` | 查看 viewer，修改 super_admin |
+| Telegram/SafeW 目标 | `/api/v1/targets*` | 查看 viewer，修改 super_admin |
 | 审核任务 | `/api/v1/reviews*` | 查看 viewer，操作 reviewer |
 | 媒体预览 | `/api/v1/reviews/{id}/preview`、`/api/v1/media/*` | viewer |
 | 规则与规则组 | `/api/v1/rules*`、`/api/v1/rule-groups*` | super_admin |

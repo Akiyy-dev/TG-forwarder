@@ -14,6 +14,8 @@ from app.entrypoints.common import install_shutdown_handlers
 from app.logging import get_logger, setup_logging
 from app.messaging.models import CommandEvent, IncomingMessageEvent
 from app.messaging.redis_streams import RedisStreamBus
+from app.publishers.outbound_publisher import OutboundPublisher
+from app.publishers.safew_publisher import SafeWPublisher
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.auto_approve import ReviewAutoApproveService
 from app.review.publish import ReviewPublishService
@@ -95,11 +97,19 @@ async def run() -> None:
         logger.info("rules_seed_applied", count=rules_synced)
 
     bot = create_bot(settings.bot_token)
-    publisher = TelegramPublisher(
+    telegram_publisher = TelegramPublisher(
         bot,
         max_retries=settings.max_retries,
         base_delay=settings.retry_base_delay_seconds,
     )
+    safew_publisher = SafeWPublisher(
+        settings.safew_bot_token,
+        api_base_url=settings.safew_bot_api_base_url,
+        timeout_seconds=settings.safew_bot_timeout_seconds,
+        max_retries=settings.max_retries,
+        base_delay=settings.retry_base_delay_seconds,
+    )
+    publisher = OutboundPublisher(telegram_publisher, safew_publisher)
     media_service = MediaService(
         settings.download_dir,
         max_size_bytes=settings.max_download_size_bytes,
@@ -173,7 +183,7 @@ async def run() -> None:
             return
         if event.kind == "check_target_permissions":
             result = await channel_service.check_target_permissions(
-                int(event.payload["target_id"]), bot
+                int(event.payload["target_id"]), bot, safew_publisher
             )
             logger.info(
                 "target_permission_command_complete",
@@ -186,6 +196,7 @@ async def run() -> None:
                 int(event.payload["target_id"]),
                 bot,
                 str(event.payload.get("text") or "TG-forwarder test message"),
+                safew_publisher,
             )
             logger.info(
                 "target_test_command_complete",
@@ -219,6 +230,7 @@ async def run() -> None:
         stop_event.set()
         await auto_approve.stop()
         await message_service.stop_workers()
+        await publisher.close()
         if dispatcher is not None and polling_task is not None and not polling_task.done():
             await dispatcher.stop_polling()
         for task in tasks:

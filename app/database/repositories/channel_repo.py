@@ -101,9 +101,14 @@ class ChannelRepository:
     async def get_target_by_id(self, target_id: int) -> TargetChannel | None:
         return await self._session.get(TargetChannel, target_id)
 
-    async def get_target_by_chat_id(self, chat_id: int) -> TargetChannel | None:
+    async def get_target_by_chat_id(
+        self, chat_id: int, *, target_backend: str = "telegram"
+    ) -> TargetChannel | None:
         result = await self._session.execute(
-            select(TargetChannel).where(TargetChannel.chat_id == chat_id)
+            select(TargetChannel).where(
+                TargetChannel.chat_id == chat_id,
+                TargetChannel.target_backend == target_backend,
+            )
         )
         return result.scalar_one_or_none()
 
@@ -111,16 +116,18 @@ class ChannelRepository:
         self,
         *,
         chat_id: int,
+        target_backend: str = "telegram",
         username: str | None = None,
         title: str | None = None,
         enabled: bool = True,
         default_footer: str | None = None,
         access_status: str | None = None,
     ) -> TargetChannel:
-        target = await self.get_target_by_chat_id(chat_id)
+        target = await self.get_target_by_chat_id(chat_id, target_backend=target_backend)
         if target is None:
             target = TargetChannel(
                 chat_id=chat_id,
+                target_backend=target_backend,
                 username=username,
                 title=title,
                 enabled=enabled,

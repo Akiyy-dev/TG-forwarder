@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     safew_capture_all_apps: bool = False
     safew_auto_register_sources: bool = True
 
+    # SafeW Bot API publisher. The token is optional until a SafeW target is used.
+    safew_bot_token: str = ""
+    safew_bot_api_base_url: str = "https://api.safew.bot"
+    safew_bot_timeout_seconds: float = 30.0
+
     album_wait_seconds: float = 2.5
     album_max_wait_seconds: float = 20.0
     queue_maxsize: int = 1000
@@ -171,7 +176,7 @@ class Settings(BaseSettings):
             return [(str(a), str(b)) for a, b in value]
         return _parse_replacements(str(value) if value is not None else "")
 
-    @field_validator("telegram_api_hash", "bot_token")
+    @field_validator("telegram_api_hash", "bot_token", "safew_bot_token")
     @classmethod
     def strip_secrets(cls, value: str) -> str:
         return value.strip()
@@ -195,6 +200,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.max_download_size_mb <= 0:
             msg = "MAX_DOWNLOAD_SIZE_MB must be positive"
+            raise ValueError(msg)
+        if self.safew_bot_timeout_seconds <= 0:
+            msg = "SAFEW_BOT_TIMEOUT_SECONDS must be positive"
             raise ValueError(msg)
         if self.album_wait_seconds <= 0 or self.album_max_wait_seconds < self.album_wait_seconds:
             msg = "ALBUM wait times are invalid"

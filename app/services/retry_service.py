@@ -27,6 +27,15 @@ _RETRYABLE_NAMES = {
     "TimeoutError",
     "asyncio.TimeoutError",
     "ServerError",
+    "SafeWServerError",
+    "ConnectError",
+    "ConnectTimeout",
+    "PoolTimeout",
+    "ReadError",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "WriteError",
+    "WriteTimeout",
 }
 
 _FATAL_NAMES = {
@@ -39,13 +48,17 @@ _FATAL_NAMES = {
     "UserBannedInChannelError",
     "MessageIdInvalidError",
     "BotMethodInvalidError",
+    "SafeWBadRequest",
+    "SafeWUnauthorizedError",
+    "SafeWForbiddenError",
+    "SafeWNotFoundError",
 }
 
 
 def classify_exception(exc: BaseException) -> RetryClass:
     name = type(exc).__name__
     # aiogram RetryAfter
-    if name in {"TelegramRetryAfter", "RetryAfter", "FloodWaitError"}:
+    if name in {"TelegramRetryAfter", "RetryAfter", "FloodWaitError", "SafeWRateLimitError"}:
         return RetryClass.WAIT
     if name in _FATAL_NAMES or "Forbidden" in name or "BadRequest" in name:
         return RetryClass.FATAL

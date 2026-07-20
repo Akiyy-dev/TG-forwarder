@@ -55,6 +55,7 @@ class ReviewService:
         matched_rules: list[Any] | None = None,
         detected_keywords: list[Any] | None = None,
         decision_reason: str | None = None,
+        target_destination_ids: list[int] | None = None,
         target_api_endpoint_ids: list[int] | None = None,
     ) -> ReviewTask:
         async with self.session_factory() as session:
@@ -78,6 +79,7 @@ class ReviewService:
                 source_message_id=processed.source_message_id,
                 target_chat_id=primary_target,
                 target_chat_ids=target_ids or None,
+                target_destination_ids=target_destination_ids or None,
                 target_api_endpoint_ids=target_api_endpoint_ids or None,
                 original_text=original_text or "",
                 processed_text=processed_text,

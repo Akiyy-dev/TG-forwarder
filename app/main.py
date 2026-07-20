@@ -17,6 +17,8 @@ from app.context import AppContext
 from app.database.session import dispose_engine, init_db
 from app.listeners.telegram_listener import TelegramListener
 from app.logging import get_logger, setup_logging
+from app.publishers.outbound_publisher import OutboundPublisher
+from app.publishers.safew_publisher import SafeWPublisher
 from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.auto_approve import ReviewAutoApproveService
 from app.review.publish import ReviewPublishService
@@ -69,11 +71,19 @@ async def run_app() -> None:
         logger.info("rules_seed_applied", count=rules_synced)
 
     bot = create_bot(settings.bot_token)
-    publisher = TelegramPublisher(
+    telegram_publisher = TelegramPublisher(
         bot,
         max_retries=settings.max_retries,
         base_delay=settings.retry_base_delay_seconds,
     )
+    safew_publisher = SafeWPublisher(
+        settings.safew_bot_token,
+        api_base_url=settings.safew_bot_api_base_url,
+        timeout_seconds=settings.safew_bot_timeout_seconds,
+        max_retries=settings.max_retries,
+        base_delay=settings.retry_base_delay_seconds,
+    )
+    publisher = OutboundPublisher(telegram_publisher, safew_publisher)
     media_service = MediaService(
         settings.download_dir,
         max_size_bytes=settings.max_download_size_bytes,
@@ -209,6 +219,7 @@ async def run_app() -> None:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     await bot.session.close()
+    await publisher.close()
     await dispose_engine()
     logger.info("app_stopped")
 

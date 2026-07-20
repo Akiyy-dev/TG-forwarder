@@ -98,6 +98,9 @@ services:
       BOT_ADMIN_IDS: ${BOT_ADMIN_IDS:-}
       BOT_POLLING_ENABLED: ${BOT_POLLING_ENABLED:-true}
       SAFEW_AUTO_REGISTER_SOURCES: ${SAFEW_AUTO_REGISTER_SOURCES:-true}
+      SAFEW_BOT_TOKEN: ${SAFEW_BOT_TOKEN:-}
+      SAFEW_BOT_API_BASE_URL: ${SAFEW_BOT_API_BASE_URL:-https://api.safew.bot}
+      SAFEW_BOT_TIMEOUT_SECONDS: ${SAFEW_BOT_TIMEOUT_SECONDS:-30}
     volumes:
       - media-data:/data/downloads
       - history-data:/data/history

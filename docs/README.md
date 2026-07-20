@@ -1,6 +1,6 @@
 # TG-forwarder 文档
 
-本文档目录对应当前 `main` 分支实现。频道来源、Telegram 目标、API 目标及绑定关系均由
+本文档目录对应当前 `main` 分支实现。频道来源、Telegram/SafeW 发送目标、API 目标及绑定关系均由
 Web 和数据库管理，不再从环境变量或 `config/channels.yaml` 读取。
 
 ## 文档索引

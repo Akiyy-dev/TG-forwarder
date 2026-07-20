@@ -53,9 +53,19 @@ class SourceChannel(Base):
 
 class TargetChannel(Base):
     __tablename__ = "target_channels"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_backend",
+            "chat_id",
+            name="uq_target_channel_backend_chat",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    target_backend: Mapped[str] = mapped_column(
+        String(32), default="telegram", nullable=False, index=True
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -290,6 +300,7 @@ class ReviewTask(Base):
     source_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     target_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_chat_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    target_destination_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     target_api_endpoint_ids: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     original_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     processed_text: Mapped[str] = mapped_column(Text, nullable=False, default="")

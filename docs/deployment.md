@@ -61,12 +61,16 @@ TELEGRAM_API_ID=12345678
 TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_PHONE=+8613800000000
 BOT_TOKEN=123456:your_bot_token
+# 可选：只有使用 SafeW Bot 发送目标时才需要
+SAFEW_BOT_TOKEN=123456:your_safew_bot_token
 
 NOVNC_PASSWORD=另一个强密码
 ```
 
 `TELEGRAM_API_ID` 与 `TELEGRAM_API_HASH` 来自
-[my.telegram.org](https://my.telegram.org)。Bot 必须在每个 Telegram 目标频道拥有发消息权限。
+[my.telegram.org](https://my.telegram.org)。Telegram Bot 必须在每个 Telegram 目标频道拥有
+发消息权限。SafeW 发送目标使用 SafeW 应用内 `@BotFather` 创建的 Token，Bot 同样必须
+加入目标聊天并取得发消息权限。
 
 数据库密码会嵌入连接 URL，建议使用长字母数字字符串，避免 `@`、`:`、`/`、`#` 等需要
 URL 编码的字符。
@@ -219,10 +223,10 @@ noVNC 不应直接暴露到公网。
 
 进入 Web 后：
 
-1. 在“频道管理”添加 Telegram 目标；
+1. 在“频道管理”添加 Telegram 或 SafeW 发送目标；
 2. 检测 Bot 权限并发送测试消息；
 3. 添加 Telegram 来源，或等待 SafeW 新会话自动登记；
-4. 为来源绑定 Telegram/API 目标；
+4. 在来源行的统一选择框绑定 Telegram、SafeW、API 目标；
 5. 选择发布模式；
 6. 配置规则并用测试功能验证；
 7. 从审核队列或消息历史确认处理结果。
@@ -393,6 +397,6 @@ curl http://127.0.0.1:8000/api/v1/health
 - `migrate` 为 `Exited (0)`；
 - 健康检查返回 `ok: true`；
 - Web“系统状态”能看到业务进程心跳；
-- Telegram 测试目标可成功发送消息。
+- Telegram/SafeW 测试目标可成功发送消息。
 
 遇到问题请参考[故障排查](troubleshooting.md)。

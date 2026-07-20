@@ -12,7 +12,7 @@ from app.api.errors import AppError
 from app.api.pagination import PageParams, build_page
 from app.api.schemas import APIModel, Envelope
 from app.context import AppContext
-from app.schemas.channel import PublishMode
+from app.schemas.channel import PublishMode, TargetBackend
 from app.services.api_delivery_service import ApiDeliveryService
 from app.services.channel_service import ChannelServiceError
 from app.source_backends import source_backend_for_chat_id
@@ -64,6 +64,7 @@ class SourcePatchRequest(APIModel):
 
 class TargetChannelOut(APIModel):
     id: int
+    target_backend: TargetBackend = TargetBackend.TELEGRAM
     chat_id: int
     username: str | None = None
     title: str | None = None
@@ -80,6 +81,7 @@ class TargetChannelOut(APIModel):
 
 class TargetCreateRequest(APIModel):
     chat_id: int
+    target_backend: TargetBackend = TargetBackend.TELEGRAM
     username: str | None = None
     title: str | None = Field(default=None, max_length=512)
     enabled: bool = True
@@ -102,6 +104,11 @@ class LinkTargetsRequest(APIModel):
 
 
 class LinkApiEndpointsRequest(APIModel):
+    api_endpoint_ids: list[int] = Field(default_factory=list)
+
+
+class LinkDestinationsRequest(APIModel):
+    target_ids: list[int] = Field(default_factory=list)
     api_endpoint_ids: list[int] = Field(default_factory=list)
 
 
@@ -326,6 +333,30 @@ async def put_channel_api_endpoints(
     return Envelope(data={"api_endpoint_ids": endpoint_ids})
 
 
+@router.put("/channels/{source_id}/destinations", response_model=Envelope[dict[str, Any]])
+async def put_channel_destinations(
+    source_id: int,
+    body: LinkDestinationsRequest,
+    _admin: SuperAdminUser,
+    ctx: Annotated[AppContext, Depends(get_ctx)],
+) -> Envelope[dict[str, Any]]:
+    try:
+        target_ids, chat_ids, endpoint_ids = await ctx.channel_service.set_source_destinations(
+            source_id,
+            target_ids=body.target_ids,
+            api_endpoint_ids=body.api_endpoint_ids,
+        )
+    except ChannelServiceError as exc:
+        raise _map_err(exc) from exc
+    return Envelope(
+        data={
+            "target_ids": target_ids,
+            "target_chat_ids": chat_ids,
+            "api_endpoint_ids": endpoint_ids,
+        }
+    )
+
+
 @router.delete("/channels/{source_id}", response_model=Envelope[dict[str, Any]])
 async def delete_channel(
     source_id: int,
@@ -436,7 +467,11 @@ async def check_target_permissions(
         return Envelope(data={"queued": True, "command_id": command_id})
     bot = ctx.bot or getattr(ctx.publisher, "bot", None)
     try:
-        result = await ctx.channel_service.check_target_permissions(target_id, bot)
+        result = await ctx.channel_service.check_target_permissions(
+            target_id,
+            bot,
+            getattr(ctx.publisher, "safew", None),
+        )
     except ChannelServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=result)
@@ -457,7 +492,12 @@ async def send_target_test_message(
         return Envelope(data={"queued": True, "command_id": command_id})
     bot = ctx.bot or getattr(ctx.publisher, "bot", None)
     try:
-        result = await ctx.channel_service.send_target_test_message(target_id, bot, body.text)
+        result = await ctx.channel_service.send_target_test_message(
+            target_id,
+            bot,
+            body.text,
+            getattr(ctx.publisher, "safew", None),
+        )
     except ChannelServiceError as exc:
         raise _map_err(exc) from exc
     return Envelope(data=result)

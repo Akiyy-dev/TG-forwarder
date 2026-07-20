@@ -128,6 +128,73 @@ async def test_channels_crud_default_review(
         assert forbidden.status_code == 403
 
 
+async def test_safew_target_and_unified_destination_binding(
+    settings_env: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    ctx = _ctx(settings_env, session_factory)
+    await ctx.auth_service.create_user(
+        username="admin", password="password123", role=Role.SUPER_ADMIN
+    )
+    app = create_api_app(ctx)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "password123"},
+        )
+        source = (
+            await client.post(
+                "/api/v1/channels",
+                json={"chat_id": -100710, "title": "Source"},
+            )
+        ).json()["data"]
+        telegram = await client.post(
+            "/api/v1/targets",
+            json={
+                "chat_id": -100711,
+                "target_backend": "telegram",
+                "title": "TG target",
+            },
+        )
+        safew = await client.post(
+            "/api/v1/targets",
+            json={
+                "chat_id": -100711,
+                "target_backend": "safew",
+                "title": "SafeW target",
+            },
+        )
+        endpoint = await client.post(
+            "/api/v1/api-endpoints",
+            json={"name": "client"},
+        )
+        assert telegram.status_code == 200
+        assert safew.status_code == 200
+        assert safew.json()["data"]["target_backend"] == "safew"
+        assert endpoint.status_code == 200
+
+        linked = await client.put(
+            f"/api/v1/channels/{source['id']}/destinations",
+            json={
+                "target_ids": [telegram.json()["data"]["id"], safew.json()["data"]["id"]],
+                "api_endpoint_ids": [endpoint.json()["data"]["id"]],
+            },
+        )
+        assert linked.status_code == 200
+        assert linked.json()["data"]["target_ids"] == [
+            telegram.json()["data"]["id"],
+            safew.json()["data"]["id"],
+        ]
+        assert linked.json()["data"]["api_endpoint_ids"] == [endpoint.json()["data"]["id"]]
+
+        refreshed = await client.get(f"/api/v1/channels/{source['id']}")
+        assert refreshed.json()["data"]["target_ids"] == linked.json()["data"]["target_ids"]
+        assert refreshed.json()["data"]["api_endpoint_ids"] == linked.json()["data"][
+            "api_endpoint_ids"
+        ]
+
+
 async def test_publish_mode_review_and_paused(
     settings_env: Settings,
     session_factory: async_sessionmaker[AsyncSession],

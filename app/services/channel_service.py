@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.database.models import (
+    ApiEndpoint,
     SourceApiEndpointLink,
     SourceChannel,
     SourceTargetLink,
@@ -17,7 +18,7 @@ from app.database.models import (
 )
 from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
-from app.schemas.channel import PublishMode, SourceChannelConfig
+from app.schemas.channel import PublishMode, SourceChannelConfig, TargetBackend, TargetRoute
 from app.services.telegram_account import check_channel_accessible, list_broadcast_channels
 from app.source_backends import is_safew_chat_id
 
@@ -43,6 +44,7 @@ class ChannelService:
         self._configs: dict[int, SourceChannelConfig] = {}
         self._source_by_id: dict[int, int] = {}
         self._target_titles: dict[int, str] = {}
+        self._target_routes: dict[int, list[TargetRoute]] = {}
 
     @property
     def enabled_chat_ids(self) -> set[int]:
@@ -65,6 +67,9 @@ class ChannelService:
             return []
         return list(cfg.target_chat_ids or [])
 
+    def get_target_routes_for(self, source_chat_id: int) -> list[TargetRoute]:
+        return list(self._target_routes.get(source_chat_id, []))
+
     def display_name(self, chat_id: int) -> str:
         cfg = self._configs.get(chat_id)
         if cfg:
@@ -83,13 +88,14 @@ class ChannelService:
         self,
         ch: SourceChannel,
         *,
-        target_chat_ids: list[int],
+        target_routes: list[TargetRoute],
     ) -> SourceChannelConfig:
         try:
             mode = PublishMode(ch.publish_mode)
         except ValueError:
             mode = PublishMode.REVIEW
-        ids = list(target_chat_ids)
+        ids = [route.chat_id for route in target_routes]
+        target_ids = [route.id for route in target_routes]
         primary_target = ids[0] if ids else None
         return SourceChannelConfig(
             id=ch.id,
@@ -100,42 +106,57 @@ class ChannelService:
             publish_mode=mode,
             target_channel_id=primary_target,
             target_chat_ids=ids,
+            target_ids=target_ids,
             access_status=getattr(ch, "access_status", "unknown") or "unknown",
             processing_profile=ch.processing_profile,
             created_at=ch.created_at,
             updated_at=ch.updated_at,
         )
 
-    async def _load_target_map(self, session: AsyncSession) -> dict[int, list[int]]:
-        """source_id -> list of target telegram chat_ids."""
+    async def _load_target_map(self, session: AsyncSession) -> dict[int, list[TargetRoute]]:
+        """Return enabled Telegram/SafeW target routes grouped by source DB id."""
         links = (
             await session.execute(
                 select(
                     SourceTargetLink,
+                    TargetChannel.id,
+                    TargetChannel.target_backend,
                     TargetChannel.chat_id,
+                    TargetChannel.title,
                     TargetChannel.enabled,
                 )
                 .outerjoin(TargetChannel, SourceTargetLink.target_id == TargetChannel.id)
                 .order_by(SourceTargetLink.id)
             )
         ).all()
-        mapping: dict[int, list[int]] = {}
-        for link, chat_id, enabled in links:
+        mapping: dict[int, list[TargetRoute]] = {}
+        for link, target_id, target_backend, chat_id, title, enabled in links:
             targets = mapping.setdefault(int(link.source_id), [])
-            if enabled is True and chat_id is not None:
-                targets.append(int(chat_id))
+            if enabled is True and chat_id is not None and target_id is not None:
+                try:
+                    backend = TargetBackend(str(target_backend or TargetBackend.TELEGRAM.value))
+                except ValueError:
+                    backend = TargetBackend.TELEGRAM
+                targets.append(
+                    TargetRoute(
+                        id=int(target_id),
+                        target_backend=backend,
+                        chat_id=int(chat_id),
+                        title=str(title) if title else None,
+                    )
+                )
         return mapping
 
     def _apply_cache(
         self,
         channels: list[SourceChannel],
-        target_map: dict[int, list[int]] | None = None,
+        target_map: dict[int, list[TargetRoute]] | None = None,
         targets: list[TargetChannel] | None = None,
     ) -> None:
         target_map = target_map or {}
         targets = targets or []
         self._configs = {
-            ch.chat_id: self._row_to_config(ch, target_chat_ids=target_map.get(ch.id, []))
+            ch.chat_id: self._row_to_config(ch, target_routes=target_map.get(ch.id, []))
             for ch in channels
         }
         self._enabled_ids = {ch.chat_id for ch in channels if ch.enabled}
@@ -143,6 +164,9 @@ class ChannelService:
         self._target_titles = {
             t.chat_id: (t.title or (f"@{t.username}" if t.username else str(t.chat_id)))
             for t in targets
+        }
+        self._target_routes = {
+            ch.chat_id: list(target_map.get(ch.id, [])) for ch in channels
         }
 
     async def load_from_db(self) -> None:
@@ -320,21 +344,45 @@ class ChannelService:
 
     async def create_target(self, data: dict[str, Any], *, client: Any = None) -> TargetChannel:
         chat_id = int(data["chat_id"])
-        access = await self._resolve_access(
-            client,
-            chat_id=chat_id,
-            username=data.get("username"),
-        )
+        try:
+            target_backend = TargetBackend(
+                str(data.get("target_backend") or TargetBackend.TELEGRAM.value)
+            )
+        except ValueError as exc:
+            raise ChannelServiceError(
+                f"invalid target_backend: {data.get('target_backend')}",
+                code="validation_error",
+            ) from exc
+        if target_backend == TargetBackend.TELEGRAM:
+            access = await self._resolve_access(
+                client,
+                chat_id=chat_id,
+                username=data.get("username"),
+            )
+        else:
+            access = {
+                "status": "unknown",
+                "username": data.get("username"),
+                "title": data.get("title"),
+            }
         want_enabled = bool(data.get("enabled", True))
-        if want_enabled and access["status"] == "missing":
+        if (
+            target_backend == TargetBackend.TELEGRAM
+            and want_enabled
+            and access["status"] == "missing"
+        ):
             want_enabled = False
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
-            existing = await repo.get_target_by_chat_id(chat_id)
+            existing = await repo.get_target_by_chat_id(
+                chat_id,
+                target_backend=target_backend.value,
+            )
             if existing is not None:
                 raise ChannelServiceError("target channel already exists", code="conflict")
             target = await repo.upsert_target(
                 chat_id=chat_id,
+                target_backend=target_backend.value,
                 username=data.get("username") or access.get("username"),
                 title=data.get("title") or access.get("title"),
                 enabled=want_enabled,
@@ -361,7 +409,11 @@ class ChannelService:
                 target.title = data["title"]
             if "enabled" in data:
                 want = bool(data["enabled"])
-                if want and (target.access_status or "unknown") == "missing":
+                if (
+                    want
+                    and target.target_backend == TargetBackend.TELEGRAM.value
+                    and (target.access_status or "unknown") == "missing"
+                ):
                     access = await self._resolve_access(
                         client,
                         chat_id=target.chat_id,
@@ -505,7 +557,7 @@ class ChannelService:
         return await self._resolve_access(client, chat_id=chat_id, username=username)
 
     async def _resolve_target_db_ids(self, session: AsyncSession, ids: list[int]) -> list[int]:
-        """Accept target DB ids or telegram chat_ids; return target DB ids."""
+        """Accept target DB ids or legacy Telegram chat ids; return target DB ids."""
         repo = ChannelRepository(session)
         out: list[int] = []
         for raw in ids:
@@ -514,7 +566,10 @@ class ChannelService:
             if by_id is not None:
                 out.append(by_id.id)
                 continue
-            by_chat = await repo.get_target_by_chat_id(tid)
+            by_chat = await repo.get_target_by_chat_id(
+                tid,
+                target_backend=TargetBackend.TELEGRAM.value,
+            )
             if by_chat is not None:
                 out.append(by_chat.id)
         return out
@@ -528,7 +583,10 @@ class ChannelService:
             if by_id is not None:
                 out.append(by_id.chat_id)
                 continue
-            by_chat = await repo.get_target_by_chat_id(tid)
+            by_chat = await repo.get_target_by_chat_id(
+                tid,
+                target_backend=TargetBackend.TELEGRAM.value,
+            )
             if by_chat is not None:
                 out.append(by_chat.chat_id)
         return out
@@ -574,6 +632,57 @@ class ChannelService:
             await session.commit()
         await self.load_from_db()
         return chat_ids
+
+    async def set_source_destinations(
+        self,
+        source_id: int,
+        *,
+        target_ids: list[int],
+        api_endpoint_ids: list[int],
+    ) -> tuple[list[int], list[int], list[int]]:
+        """Atomically replace all bot-channel and public API destinations."""
+        async with self.session_factory() as session:
+            repo = ChannelRepository(session)
+            source = await repo.get_by_id(source_id)
+            if source is None:
+                raise ChannelServiceError("source channel not found", code="not_found")
+            linked_target_ids = list(dict.fromkeys(int(value) for value in target_ids))
+            for target_id in linked_target_ids:
+                if await session.get(TargetChannel, target_id) is None:
+                    raise ChannelServiceError(
+                        f"target channel not found: {target_id}",
+                        code="validation_error",
+                    )
+            chat_ids = await self._replace_source_links(
+                session,
+                source_id,
+                linked_target_ids,
+            )
+
+            requested_api_ids = list(dict.fromkeys(int(value) for value in api_endpoint_ids))
+            valid_api_ids: list[int] = []
+            for endpoint_id in requested_api_ids:
+                if await session.get(ApiEndpoint, endpoint_id) is None:
+                    raise ChannelServiceError(
+                        f"API endpoint not found: {endpoint_id}",
+                        code="validation_error",
+                    )
+                valid_api_ids.append(endpoint_id)
+            await session.execute(
+                delete(SourceApiEndpointLink).where(
+                    SourceApiEndpointLink.source_id == source_id
+                )
+            )
+            for endpoint_id in valid_api_ids:
+                session.add(
+                    SourceApiEndpointLink(
+                        source_id=source_id,
+                        api_endpoint_id=endpoint_id,
+                    )
+                )
+            await session.commit()
+        await self.load_from_db()
+        return linked_target_ids, chat_ids, valid_api_ids
 
     async def set_target_sources(self, target_id: int, source_ids: list[int]) -> list[int]:
         async with self.session_factory() as session:
@@ -682,6 +791,8 @@ class ChannelService:
                     if status != "ok" and ch.enabled:
                         ch.enabled = False
                 for t in await repo.list_targets():
+                    if t.target_backend != TargetBackend.TELEGRAM.value:
+                        continue
                     status = "ok" if t.chat_id in accessible_ids else "missing"
                     if t.access_status != status:
                         t.access_status = status
@@ -696,35 +807,71 @@ class ChannelService:
             "account_channels": len(account_items),
         }
 
-    async def check_target_permissions(self, target_id: int, bot: Any) -> dict[str, Any]:
-        if bot is None:
-            raise ChannelServiceError("bot is not available", code="unavailable")
+    async def check_target_permissions(
+        self,
+        target_id: int,
+        bot: Any,
+        safew_publisher: Any | None = None,
+    ) -> dict[str, Any]:
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
             target = await repo.get_target_by_id(target_id)
             if target is None:
                 raise ChannelServiceError("target channel not found", code="not_found")
             chat_id = target.chat_id
+            target_backend = TargetBackend(target.target_backend)
+
+        if target_backend == TargetBackend.TELEGRAM and bot is None:
+            raise ChannelServiceError("Telegram bot is not available", code="unavailable")
+        if target_backend == TargetBackend.SAFEW and (
+            safew_publisher is None or not getattr(safew_publisher, "configured", False)
+        ):
+            raise ChannelServiceError("SafeW bot token is not configured", code="unavailable")
 
         detail: dict[str, Any]
         status = "ok"
         try:
-            me = await bot.get_me()
-            member = await bot.get_chat_member(chat_id, me.id)
-            can_post = bool(getattr(member, "can_post_messages", False))
-            status_name = getattr(getattr(member, "status", None), "value", None) or str(
-                getattr(member, "status", "unknown")
-            )
-            status = "ok" if status_name in {"administrator", "creator"} or can_post else "missing"
-            detail = {
-                "bot_id": me.id,
-                "bot_username": me.username,
-                "member_status": status_name,
-                "can_post_messages": can_post,
-            }
+            if target_backend == TargetBackend.SAFEW:
+                assert safew_publisher is not None
+                chat = await safew_publisher.get_chat(chat_id)
+                permissions = chat.get("permissions")
+                can_send = (
+                    permissions.get("can_send_messages")
+                    if isinstance(permissions, dict)
+                    else None
+                )
+                status = "ok" if can_send is not False else "missing"
+                detail = {
+                    "target_backend": target_backend.value,
+                    "chat_type": chat.get("type"),
+                    "title": chat.get("title"),
+                    "username": chat.get("username"),
+                    "can_send_messages": can_send,
+                }
+            else:
+                me = await bot.get_me()
+                member = await bot.get_chat_member(chat_id, me.id)
+                can_post = bool(getattr(member, "can_post_messages", False))
+                status_name = getattr(getattr(member, "status", None), "value", None) or str(
+                    getattr(member, "status", "unknown")
+                )
+                status = (
+                    "ok" if status_name in {"administrator", "creator"} or can_post else "missing"
+                )
+                detail = {
+                    "target_backend": target_backend.value,
+                    "bot_id": me.id,
+                    "bot_username": me.username,
+                    "member_status": status_name,
+                    "can_post_messages": can_post,
+                }
         except Exception as exc:
             status = "error"
-            detail = {"error": type(exc).__name__, "message": str(exc)}
+            detail = {
+                "target_backend": target_backend.value,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            }
 
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
@@ -738,6 +885,7 @@ class ChannelService:
             await session.refresh(target)
             return {
                 "target_id": target.id,
+                "target_backend": target.target_backend,
                 "chat_id": target.chat_id,
                 "permission_status": target.permission_status,
                 "permission_detail": target.permission_detail,
@@ -748,9 +896,13 @@ class ChannelService:
                 ),
             }
 
-    async def send_target_test_message(self, target_id: int, bot: Any, text: str) -> dict[str, Any]:
-        if bot is None:
-            raise ChannelServiceError("bot is not available", code="unavailable")
+    async def send_target_test_message(
+        self,
+        target_id: int,
+        bot: Any,
+        text: str,
+        safew_publisher: Any | None = None,
+    ) -> dict[str, Any]:
         async with self.session_factory() as session:
             repo = ChannelRepository(session)
             target = await repo.get_target_by_id(target_id)
@@ -759,11 +911,27 @@ class ChannelService:
             if not target.enabled:
                 raise ChannelServiceError("target channel is disabled", code="invalid_state")
             chat_id = target.chat_id
+            target_backend = TargetBackend(target.target_backend)
+        if target_backend == TargetBackend.TELEGRAM and bot is None:
+            raise ChannelServiceError("Telegram bot is not available", code="unavailable")
+        if target_backend == TargetBackend.SAFEW and (
+            safew_publisher is None or not getattr(safew_publisher, "configured", False)
+        ):
+            raise ChannelServiceError("SafeW bot token is not configured", code="unavailable")
         try:
-            sent = await bot.send_message(chat_id, text)
+            if target_backend == TargetBackend.SAFEW:
+                assert safew_publisher is not None
+                message_id = await safew_publisher.send_test_message(chat_id, text)
+            else:
+                sent = await bot.send_message(chat_id, text)
+                message_id = getattr(sent, "message_id", None)
         except Exception as exc:
             raise ChannelServiceError(
                 f"failed to send test message: {exc}", code="publish_failed"
             ) from exc
-        message_id = getattr(sent, "message_id", None)
-        return {"chat_id": chat_id, "message_id": message_id, "text": text}
+        return {
+            "target_backend": target_backend.value,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        }

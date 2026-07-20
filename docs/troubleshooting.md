@@ -164,7 +164,19 @@ BOT_POLLING_ENABLED=false
 
 ## 3. SafeW 与 noVNC
 
-### 3.1 noVNC 无法访问
+### 3.1 SafeW 目标提示 Token 未配置
+
+SafeW 桌面登录只负责接收通知，不能代替 Bot API 发送凭证。在 Compose 使用的 `.env` 中设置
+`SAFEW_BOT_TOKEN`，重建 sender，然后在“频道管理 → 发送目标”执行权限检测和测试消息：
+
+```bash
+docker compose up -d --force-recreate sender
+docker compose logs --tail=100 sender
+```
+
+若返回 403，请确认 SafeW Bot 已加入目标聊天并拥有发消息权限；404 通常表示聊天 ID 错误。
+
+### 3.2 noVNC 无法访问
 
 Compose 默认只监听服务器 `127.0.0.1`，远程直接访问失败是预期行为。使用 SSH 隧道：
 
@@ -180,7 +192,7 @@ http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale
 
 若本机端口被占用，可改为 `-L 16080:127.0.0.1:6080` 并访问 16080。
 
-### 3.2 noVNC 打开但 SafeW 没启动
+### 3.3 noVNC 打开但 SafeW 没启动
 
 ```bash
 docker compose ps safew-receiver
@@ -191,7 +203,7 @@ docker compose exec safew-receiver pgrep -af SafeW
 常见原因：安装包架构/版本不匹配、共享内存不足、客户端依赖变化、资料卷权限问题。不要先
 删除资料卷；先备份并查看日志。
 
-### 3.3 SafeW 能看到消息但没有捕获
+### 3.4 SafeW 能看到消息但没有捕获
 
 检查：
 
@@ -215,7 +227,7 @@ docker compose logs -f safew-receiver
 
 确认真实应用名后立即恢复 `false`，避免捕获其他桌面通知。
 
-### 3.4 捕获了通知但 Web 没有来源
+### 3.5 捕获了通知但 Web 没有来源
 
 确认 sender 正常、`SAFEW_AUTO_REGISTER_SOURCES=true`，并查看：
 
@@ -264,7 +276,7 @@ Telegram 来源如果已确认不可达，Web 会阻止直接启用。先确认�
 
 1. 来源是否启用；
 2. 发布模式是否为 `paused`；
-3. 是否至少绑定一个当前有效的 Telegram/API 目标；
+3. 是否至少绑定一个当前有效的 Telegram/SafeW/API 目标；
 4. 是否命中 reject/require_review 规则；
 5. 全局是否暂停；
 6. 审核队列是否存在任务；

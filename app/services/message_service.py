@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -16,9 +16,8 @@ from app.logging import get_logger
 from app.messaging.models import message_from_dict, message_to_dict
 from app.processors.deduplication import DeduplicationProcessor
 from app.processors.pipeline import ProcessorPipeline, build_default_pipeline
-from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.service import ReviewService
-from app.schemas.channel import PublishMode
+from app.schemas.channel import PublishMode, TargetRoute
 from app.schemas.message import (
     MessageStatus,
     NormalizedMessage,
@@ -51,7 +50,7 @@ class MessageService:
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
         channel_service: ChannelService,
-        publisher: TelegramPublisher,
+        publisher: Any,
         media_service: MediaService,
         review_service: ReviewService | None = None,
     ) -> None:
@@ -72,6 +71,16 @@ class MessageService:
         self._last_error: str | None = None
         self._queue_depth = 0
         self.pipeline = self._build_pipeline()
+
+    async def _publish_target(
+        self,
+        message: NormalizedMessage,
+        target: TargetRoute,
+    ) -> list[int]:
+        publish_target = getattr(self.publisher, "publish_target", None)
+        if publish_target is not None:
+            return cast(list[int], await publish_target(message, target))
+        return cast(list[int], await self.publisher.publish(message, target.chat_id))
 
     def _build_pipeline(self) -> ProcessorPipeline:
         async def exists(content_hash: str) -> bool:
@@ -441,6 +450,12 @@ class MessageService:
                 api_endpoint_ids = await self.api_delivery.active_endpoint_ids(
                     message.source_chat_id
                 )
+                target_destination_ids = [
+                    route.id
+                    for route in self.channel_service.get_target_routes_for(
+                        message.source_chat_id
+                    )
+                ]
                 await self.review_service.create_from_message(
                     processed=record,
                     original_text=original_text,
@@ -448,6 +463,7 @@ class MessageService:
                     decision_reason=decision_reason,
                     matched_rules=list(detail.get("matched_rules") or []),
                     detected_keywords=list(detail.get("detected_keywords") or []),
+                    target_destination_ids=target_destination_ids,
                     target_api_endpoint_ids=api_endpoint_ids,
                 )
                 self.history.write(
@@ -507,6 +523,7 @@ class MessageService:
     ) -> None:
         try:
             targets, routing_block = await self._refresh_routing(message)
+            target_routes = self.channel_service.get_target_routes_for(message.source_chat_id)
             api_endpoint_ids = await self.api_delivery.active_endpoint_ids(message.source_chat_id)
         except Exception as exc:
             await self._mark_failed(message, exc, record_id, increment_retry=True)
@@ -554,17 +571,26 @@ class MessageService:
                 last_exc = exc
             success = len(delivered_api_ids)
             routing_failure: str | None = None
-            for t in targets:
+            published_destinations: list[dict[str, Any]] = []
+            for route in target_routes:
                 current_targets, current_block = await self._refresh_routing(message)
+                current_routes = self.channel_service.get_target_routes_for(message.source_chat_id)
                 if current_block == SOURCE_DISABLED:
                     routing_failure = current_block
                     break
-                if int(t) not in current_targets:
+                if route.id not in {current.id for current in current_routes}:
                     routing_failure = NO_ENABLED_TARGET
                     continue
                 try:
-                    ids.extend(await self.publisher.publish(message, int(t)))
-                    published_targets.append(int(t))
+                    ids.extend(await self._publish_target(message, route))
+                    published_targets.append(route.chat_id)
+                    published_destinations.append(
+                        {
+                            "id": route.id,
+                            "target_backend": route.target_backend.value,
+                            "chat_id": route.chat_id,
+                        }
+                    )
                     success += 1
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
@@ -599,6 +625,7 @@ class MessageService:
                 "text": message.text,
                 "media_type": message.media_type.value,
                 "target_chat_ids": published_targets,
+                "target_destinations": published_destinations,
                 "target_message_ids": ids,
                 "api_endpoint_ids": delivered_api_ids,
             },

@@ -32,8 +32,7 @@ import {
   patchTarget,
   refreshChannels,
   sendTargetTestMessage,
-  setChannelTargets,
-  setChannelApiEndpoints,
+  setChannelDestinations,
   setTargetSources,
 } from '../api/channels'
 import { SourceBackendBadge } from '../components/SourceBackendBadge'
@@ -65,6 +64,7 @@ export function ChannelsPage() {
   const [picked, setPicked] = useState<string[]>([])
   const [asSource, setAsSource] = useState(true)
   const [asTarget, setAsTarget] = useState(false)
+  const [targetBackend, setTargetBackend] = useState<'telegram' | 'safew'>('telegram')
 
   const sources = useQuery({
     queryKey: ['channels'],
@@ -84,13 +84,21 @@ export function ChannelsPage() {
     enabled: accountOpen,
   })
 
-  const targetOptions = useMemo(
-    () =>
-      (targets.data?.items ?? []).map((t) => ({
-        value: String(t.id),
-        label: t.title || t.username || String(t.chat_id),
+  const destinationOptions = useMemo(
+    () => [
+      ...(targets.data?.items ?? []).map((target) => {
+        const tag = target.target_backend === 'safew' ? 'SafeW' : 'TG'
+        return {
+          value: `target:${target.id}`,
+          label: `${tag} · ${target.title || target.username || String(target.chat_id)}`,
+        }
+      }),
+      ...(apiEndpoints.data?.items ?? []).map((endpoint) => ({
+        value: `api:${endpoint.id}`,
+        label: `API · ${endpoint.name}`,
       })),
-    [targets.data],
+    ],
+    [targets.data, apiEndpoints.data],
   )
   const sourceOptions = useMemo(
     () =>
@@ -100,15 +108,6 @@ export function ChannelsPage() {
       })),
     [sources.data],
   )
-  const apiEndpointOptions = useMemo(
-    () =>
-      (apiEndpoints.data?.items ?? []).map((endpoint) => ({
-        value: String(endpoint.id),
-        label: endpoint.name,
-      })),
-    [apiEndpoints.data],
-  )
-
   const createSourceMut = useMutation({
     mutationFn: () =>
       createChannel({
@@ -129,12 +128,14 @@ export function ChannelsPage() {
     mutationFn: () =>
       createTarget({
         chat_id: Number(chatId),
+        target_backend: targetBackend,
         title: title || undefined,
       }),
     onSuccess: async () => {
       setTargetOpen(false)
       setChatId('')
       setTitle('')
+      setTargetBackend('telegram')
       await qc.invalidateQueries({ queryKey: ['targets'] })
     },
     onError: (err) => setMsg(err instanceof ApiError ? err.message : '创建失败'),
@@ -199,7 +200,7 @@ export function ChannelsPage() {
       <Tabs defaultValue="sources">
         <Tabs.List>
           <Tabs.Tab value="sources">来源频道</Tabs.Tab>
-          <Tabs.Tab value="targets">Telegram 目标</Tabs.Tab>
+          <Tabs.Tab value="targets">发送目标</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="sources" pt="md">
@@ -217,7 +218,7 @@ export function ChannelsPage() {
                   <Table.Th>聊天 ID</Table.Th>
                   <Table.Th>可达</Table.Th>
                   <Table.Th>发布模式</Table.Th>
-                  <Table.Th>目标（TG / API）</Table.Th>
+                  <Table.Th>目标（TG / SafeW / API）</Table.Th>
                   <Table.Th>启用</Table.Th>
                   {isAdmin && <Table.Th>操作</Table.Th>}
                 </Table.Tr>
@@ -263,45 +264,56 @@ export function ChannelsPage() {
                     </Table.Td>
                     <Table.Td style={{ minWidth: 220 }}>
                       {isAdmin ? (
-                        <Stack gap={6}>
-                          <MultiSelect
-                            label="Telegram"
-                            data={targetOptions}
-                            value={(ch.target_ids ?? []).map(String)}
-                            placeholder="绑定 Telegram 目标"
-                            searchable
-                            onChange={(vals) => {
-                              void setChannelTargets(ch.id, vals.map(Number))
-                                .then(() => {
-                                  void qc.invalidateQueries({ queryKey: ['channels'] })
-                                  void qc.invalidateQueries({ queryKey: ['targets'] })
-                                })
-                                .catch((err: unknown) =>
-                                  setMsg(err instanceof ApiError ? err.message : '绑定失败'),
-                                )
-                            }}
-                          />
-                          <MultiSelect
-                            label="API"
-                            data={apiEndpointOptions}
-                            value={(ch.api_endpoint_ids ?? []).map(String)}
-                            placeholder="绑定 API 目标"
-                            searchable
-                            onChange={(vals) => {
-                              void setChannelApiEndpoints(ch.id, vals.map(Number))
-                                .then(() => {
-                                  void qc.invalidateQueries({ queryKey: ['channels'] })
-                                  void qc.invalidateQueries({ queryKey: ['api-endpoints'] })
-                                })
-                                .catch((err: unknown) =>
-                                  setMsg(err instanceof ApiError ? err.message : '绑定失败'),
-                                )
-                            }}
-                          />
-                        </Stack>
+                        <MultiSelect
+                          data={destinationOptions}
+                          value={[
+                            ...(ch.target_ids ?? []).map((id) => `target:${id}`),
+                            ...(ch.api_endpoint_ids ?? []).map((id) => `api:${id}`),
+                          ]}
+                          placeholder="选择 TG、SafeW 或 API 目标"
+                          searchable
+                          renderOption={({ option }) => {
+                            const kind = option.value.startsWith('api:')
+                              ? 'API'
+                              : option.label.startsWith('SafeW')
+                                ? 'SafeW'
+                                : 'TG'
+                            return (
+                              <Group gap="xs" wrap="nowrap">
+                                <Badge
+                                  size="xs"
+                                  color={kind === 'API' ? 'violet' : kind === 'SafeW' ? 'green' : 'blue'}
+                                >
+                                  {kind}
+                                </Badge>
+                                <Text size="sm">{option.label.replace(/^\w+ · /, '')}</Text>
+                              </Group>
+                            )
+                          }}
+                          onChange={(vals) => {
+                            const target_ids = vals
+                              .filter((value) => value.startsWith('target:'))
+                              .map((value) => Number(value.slice('target:'.length)))
+                            const api_endpoint_ids = vals
+                              .filter((value) => value.startsWith('api:'))
+                              .map((value) => Number(value.slice('api:'.length)))
+                            void setChannelDestinations(ch.id, {
+                              target_ids,
+                              api_endpoint_ids,
+                            })
+                              .then(() => {
+                                void qc.invalidateQueries({ queryKey: ['channels'] })
+                                void qc.invalidateQueries({ queryKey: ['targets'] })
+                                void qc.invalidateQueries({ queryKey: ['api-endpoints'] })
+                              })
+                              .catch((err: unknown) =>
+                                setMsg(err instanceof ApiError ? err.message : '绑定失败'),
+                              )
+                          }}
+                        />
                       ) : (
                         <Text size="sm">
-                          TG {(ch.target_ids ?? []).join(', ') || '-'} / API{' '}
+                          机器人目标 {(ch.target_ids ?? []).join(', ') || '-'} / API{' '}
                           {(ch.api_endpoint_ids ?? []).join(', ') || '-'}
                         </Text>
                       )}
@@ -375,6 +387,7 @@ export function ChannelsPage() {
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>标题</Table.Th>
+                  <Table.Th>平台</Table.Th>
                   <Table.Th>聊天 ID</Table.Th>
                   <Table.Th>可达</Table.Th>
                   <Table.Th>来源绑定</Table.Th>
@@ -387,6 +400,11 @@ export function ChannelsPage() {
                 {(targets.data?.items ?? []).map((t) => (
                   <Table.Tr key={t.id}>
                     <Table.Td>{t.title || t.username || '-'}</Table.Td>
+                    <Table.Td>
+                      <Badge color={t.target_backend === 'safew' ? 'green' : 'blue'} variant="light">
+                        {t.target_backend === 'safew' ? 'SafeW' : 'Telegram'}
+                      </Badge>
+                    </Table.Td>
                     <Table.Td>{t.chat_id}</Table.Td>
                     <Table.Td>
                       <Badge color={t.access_status === 'ok' ? 'teal' : 'orange'} variant="light">
@@ -505,14 +523,28 @@ export function ChannelsPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={targetOpen} onClose={() => setTargetOpen(false)} title="添加目标频道">
+      <Modal opened={targetOpen} onClose={() => setTargetOpen(false)} title="添加发送目标">
         <Stack>
+          <Select
+            label="目标平台"
+            data={[
+              { value: 'telegram', label: 'Telegram Bot' },
+              { value: 'safew', label: 'SafeW Bot' },
+            ]}
+            value={targetBackend}
+            onChange={(value) => setTargetBackend(value === 'safew' ? 'safew' : 'telegram')}
+          />
           <TextInput
             label="聊天 ID"
             value={chatId}
             onChange={(e) => setChatId(e.currentTarget.value)}
           />
           <TextInput label="标题" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
+          {targetBackend === 'safew' && (
+            <Text c="dimmed" size="xs">
+              SafeW Bot Token 从发送端环境变量 SAFEW_BOT_TOKEN 读取，不会保存在频道数据库中。
+            </Text>
+          )}
           <Button loading={createTargetMut.isPending} onClick={() => createTargetMut.mutate()}>
             创建
           </Button>

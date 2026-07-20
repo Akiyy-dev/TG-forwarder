@@ -75,7 +75,7 @@ app/
   listeners/           Telegram、SafeW 通知接收
   messaging/           Redis Streams 事件模型与总线
   processors/          消息处理管线
-  publishers/          Telegram Bot 发布
+  publishers/          Telegram 与 SafeW Bot 发布及目标路由
   review/              审核状态机、版本与发布
   rules/               规则匹配和执行
   services/            频道、消息、API delivery 等业务服务
@@ -124,7 +124,7 @@ ruff format app scripts tests
 
 涉及消息路由时，应分别覆盖：
 
-- 只有 Telegram 目标；
+- 只有 Telegram/SafeW 机器人目标；
 - 只有 API 目标；
 - Telegram + API 多目标；
 - auto、review、rule_based、paused；

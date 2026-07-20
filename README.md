@@ -2,7 +2,7 @@
 
 TG-forwarder 是一个带 Web 管理后台的消息处理与转发系统。它使用 Telegram 用户账号或
 SafeW Linux 客户端接收消息，依次执行去重、文本处理、关键词规则和人工审核，最终发布
-到 Telegram 频道，或交付给带 Token 的对外拉取 API。
+到 Telegram 或 SafeW 频道，也可交付给带 Token 的对外拉取 API。
 
 ## 主要能力
 
@@ -10,7 +10,7 @@ SafeW Linux 客户端接收消息，依次执行去重、文本处理、关键�
 - SafeW 通知监听：在 Linux 轻量桌面中运行 SafeW，通过桌面通知获取新消息；
 - Web 管理：来源与目标绑定、规则管理、审核、消息历史、API 目标和系统状态；
 - 多种发布模式：自动发布、人工审核、规则决定和暂停；
-- 多目标路由：一个来源可同时绑定多个 Telegram 目标和多个 API 目标；
+- 多目标路由：一个来源可同时绑定多个 Telegram、SafeW Bot 和 API 目标；
 - 对外 API：独立 Token、来源白名单、启停和过期时间，支持游标增量拉取；
 - Docker Compose：Web、发送端、Telegram 接收端和 SafeW 接收端独立维护；
 - 持久化与恢复：PostgreSQL、Redis Streams、Alembic 迁移及处理状态恢复。
@@ -23,7 +23,8 @@ Telegram 用户账号 ─> telegram-receiver ─┐
 SafeW 桌面通知 ─────> safew-receiver ────┘                    │
                                                                ├─> 规则 / 审核
 浏览器 ─> web ─> PostgreSQL <──────────────────────────────────┤
-                                                               ├─> Telegram 目标
+                                                               ├─> Telegram Bot 目标
+                                                               ├─> SafeW Bot 目标
                                                                └─> Token API 队列
 ```
 
@@ -66,7 +67,8 @@ ssh -L 8000:127.0.0.1:8000 -L 6080:127.0.0.1:6080 your-user@your-server
 - Web：`http://127.0.0.1:8000`
 - SafeW noVNC：`http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale`
 
-首次登录 Web 后，按“Telegram 目标 → 来源频道 → 目标绑定 → 规则/审核”的顺序配置。
+首次登录 Web 后，按“发送目标 → 来源频道 → 统一目标绑定 → 规则/审核”的顺序配置。SafeW
+发送目标还需要在 sender 环境中设置 `SAFEW_BOT_TOKEN`。
 详见[使用指南](docs/user-guide.md)。
 
 ## 对外 API
@@ -103,6 +105,8 @@ SafeW 当前通过 Linux 桌面通知获取消息，不使用官方 User API，�
 - 无法补取历史消息；静音会话、应用未运行期间的消息可能无法捕获；
 - 通知未展示正文时无法还原正文；
 - 当前不获取媒体原文件、编辑事件或删除事件。
+
+以上限制只影响普通账号接收。SafeW 目标发送使用官方 Bot API，与桌面通知接收链路独立。
 
 Telegram 接收端仍支持原有的文本和媒体下载流程。
 

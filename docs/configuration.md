@@ -70,7 +70,7 @@ WEB_ADMIN_PASSWORD_HASH=$argon2id$v=19$m=65536,t=3,p=4$...
 | `TELEGRAM_API_ID` | Telegram 接收端是 | my.telegram.org 的 API ID |
 | `TELEGRAM_API_HASH` | Telegram 接收端是 | my.telegram.org 的 API Hash |
 | `TELEGRAM_PHONE` | 否 | 创建 Session 时的默认手机号 |
-| `BOT_TOKEN` | sender 是 | Telegram Bot Token，用于目标发布 |
+| `BOT_TOKEN` | sender 是 | Telegram Bot Token，用于 Telegram 目标发布 |
 | `BOT_ADMIN_IDS` | 见下 | 允许使用 Bot 管理命令的 Telegram 用户 ID，逗号分隔 |
 | `BOT_POLLING_ENABLED` | 否 | 是否轮询 Bot 管理命令，默认 `true` |
 
@@ -87,8 +87,13 @@ WEB_ADMIN_PASSWORD_HASH=$argon2id$v=19$m=65536,t=3,p=4$...
 | `SAFEW_ALLOWED_CHATS` | 空 | 精确允许的会话标题，空表示不过滤标题 |
 | `SAFEW_CAPTURE_ALL_APPS` | `false` | 调试时捕获所有应用通知，常态应关闭 |
 | `SAFEW_AUTO_REGISTER_SOURCES` | `true` | sender 是否自动登记新 SafeW 来源 |
+| `SAFEW_BOT_TOKEN` | 空 | SafeW @BotFather 创建的 Bot Token；配置 SafeW 发送目标时必填 |
+| `SAFEW_BOT_API_BASE_URL` | `https://api.safew.bot` | SafeW Bot API 根地址，一般无需修改 |
+| `SAFEW_BOT_TIMEOUT_SECONDS` | `30` | SafeW Bot API 单次请求超时 |
 
 `SAFEW_ALLOWED_CHATS` 使用通知中显示的会话标题，不是 Telegram ID，也不是 SafeW 内部 ID。
+`SAFEW_BOT_TOKEN` 只注入 `sender`，不写入 Web 数据库。Web 中的 SafeW 目标只保存平台、
+聊天 ID、标题、状态和来源绑定。
 
 ### 2.5 日志
 
@@ -172,7 +177,7 @@ Web“规则管理”中的数据库规则与这些基础处理器共同作用�
 以下内容不应写进 `.env`：
 
 - Telegram 来源频道；
-- Telegram 目标频道；
+- Telegram 与 SafeW Bot 目标频道；
 - 来源与目标的多对多绑定；
 - API 目标及其来源绑定；
 - 来源启用状态与发布模式；

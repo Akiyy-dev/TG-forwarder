@@ -41,7 +41,7 @@ async def run() -> None:
         settings,
         session_factory,
         channel_service,
-        unavailable,  # type: ignore[arg-type]
+        unavailable,
         media_service,
     )
     bus = RedisStreamBus(settings, consumer_name="web")

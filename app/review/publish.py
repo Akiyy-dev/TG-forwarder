@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -11,9 +11,9 @@ from app.database.models import ProcessedMessage, ReviewTask
 from app.database.repositories.message_repo import MessageRepository
 from app.logging import get_logger
 from app.messaging.models import message_to_dict
-from app.publishers.telegram_publisher import TelegramPublisher
 from app.review.service import ReviewService
 from app.review.state_machine import ReviewActionType, ReviewStatus
+from app.schemas.channel import TargetBackend, TargetRoute
 from app.schemas.message import MediaItem, MediaType, MessageStatus, NormalizedMessage
 from app.services.api_delivery_service import ApiDeliveryService
 from app.services.channel_service import ChannelService
@@ -58,7 +58,7 @@ class ReviewPublishService:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         review_service: ReviewService,
-        publisher: TelegramPublisher,
+        publisher: Any,
         media_service: MediaService,
         channel_service: ChannelService,
     ) -> None:
@@ -68,6 +68,16 @@ class ReviewPublishService:
         self.media_service = media_service
         self.channel_service = channel_service
         self.api_delivery = ApiDeliveryService(session_factory)
+
+    async def _publish_target(
+        self,
+        message: NormalizedMessage,
+        target: TargetRoute,
+    ) -> list[int]:
+        publish_target = getattr(self.publisher, "publish_target", None)
+        if publish_target is not None:
+            return cast(list[int], await publish_target(message, target))
+        return cast(list[int], await self.publisher.publish(message, target.chat_id))
 
     def _message_from_task(self, task: ReviewTask) -> NormalizedMessage:
         return message_from_task(task)
@@ -118,6 +128,52 @@ class ReviewPublishService:
         snapshot_targets: list[int],
     ) -> list[int]:
         return await self.api_delivery.active_endpoint_ids(task.source_chat_id, snapshot_targets)
+
+    async def _current_destination_routes(
+        self,
+        task: ReviewTask,
+        snapshot_destination_ids: list[int],
+        snapshot_chat_ids: list[int],
+    ) -> list[TargetRoute]:
+        """Resolve the immutable review snapshot against current target bindings."""
+        if not snapshot_destination_ids:
+            # Legacy review rows only stored chat IDs. Keep this path routed
+            # through _current_targets so existing recovery behavior remains.
+            current_chat_ids = await self._current_targets(task, snapshot_chat_ids)
+            available = self.channel_service.get_target_routes_for(task.source_chat_id)
+            resolved: list[TargetRoute] = []
+            remaining = list(current_chat_ids)
+            for route in available:
+                if route.chat_id in remaining:
+                    resolved.append(route)
+                    remaining.remove(route.chat_id)
+            # Old rows predate target DB-id snapshots. If the current target
+            # resolver is replaced by an integration/test adapter, retain the
+            # historical Telegram behavior for any unresolved chat IDs.
+            resolved.extend(
+                TargetRoute(
+                    id=chat_id,
+                    target_backend=TargetBackend.TELEGRAM,
+                    chat_id=chat_id,
+                )
+                for chat_id in remaining
+            )
+            return resolved
+
+        await self.channel_service.load_from_db()
+        if task.source_chat_id not in self.channel_service.configured_chat_ids:
+            return []
+        if not self.channel_service.is_enabled(task.source_chat_id):
+            return []
+        active = {
+            route.id: route
+            for route in self.channel_service.get_target_routes_for(task.source_chat_id)
+        }
+        return [
+            active[target_id]
+            for target_id in dict.fromkeys(snapshot_destination_ids)
+            if target_id in active
+        ]
 
     def _routing_block_reason(
         self,
@@ -195,6 +251,9 @@ class ReviewPublishService:
         elif claimed.target_chat_id is not None:
             snapshot_targets = [int(claimed.target_chat_id)]
         snapshot_api_targets = [int(value) for value in (claimed.target_api_endpoint_ids or [])]
+        snapshot_destination_ids = [
+            int(value) for value in (claimed.target_destination_ids or [])
+        ]
 
         # Ensure processed_message not already published (idempotency)
         async with self.session_factory() as session:
@@ -215,7 +274,12 @@ class ReviewPublishService:
                 }
 
         try:
-            targets = await self._current_targets(claimed, snapshot_targets)
+            routes = await self._current_destination_routes(
+                claimed,
+                snapshot_destination_ids,
+                snapshot_targets,
+            )
+            targets = [route.chat_id for route in routes]
             api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
         except Exception as exc:  # noqa: BLE001
             summary = exception_summary(exc)
@@ -248,6 +312,7 @@ class ReviewPublishService:
                 detail={
                     "stage": "target_validation",
                     "snapshot_target_chat_ids": snapshot_targets,
+                    "snapshot_target_destination_ids": snapshot_destination_ids,
                     "snapshot_api_endpoint_ids": snapshot_api_targets,
                 },
             )
@@ -262,12 +327,17 @@ class ReviewPublishService:
         try:
             message = (
                 await self.ensure_task_media(claimed)
-                if targets
+                if routes
                 else self._message_from_task(claimed)
             )
             # Media recovery may take long enough for a source, target, or link
             # to be disabled. Re-resolve after it completes before sending.
-            targets = await self._current_targets(claimed, snapshot_targets)
+            routes = await self._current_destination_routes(
+                claimed,
+                snapshot_destination_ids,
+                snapshot_targets,
+            )
+            targets = [route.chat_id for route in routes]
             api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
             routing_block = self._routing_block_reason(claimed, targets, api_targets)
             if routing_block is not None:
@@ -278,6 +348,7 @@ class ReviewPublishService:
                     detail={
                         "stage": "post_media_target_validation",
                         "snapshot_target_chat_ids": snapshot_targets,
+                        "snapshot_target_destination_ids": snapshot_destination_ids,
                         "snapshot_api_endpoint_ids": snapshot_api_targets,
                     },
                 )
@@ -310,11 +381,16 @@ class ReviewPublishService:
             published_count = len(delivered_api_ids)
             for endpoint_id in delivered_api_ids:
                 per_target[f"api:{endpoint_id}"] = {"ok": True}
-            for target in targets:
+            for target in routes:
                 # Minimise the validation-to-send window for multi-target tasks:
                 # each destination must still be enabled and bound immediately
                 # before its individual Telegram API call.
-                current_targets = await self._current_targets(claimed, snapshot_targets)
+                current_routes = await self._current_destination_routes(
+                    claimed,
+                    snapshot_destination_ids,
+                    snapshot_targets,
+                )
+                current_targets = [route.chat_id for route in current_routes]
                 current_api_targets = await self._current_api_targets(claimed, snapshot_api_targets)
                 current_block = self._routing_block_reason(
                     claimed, current_targets, current_api_targets
@@ -325,34 +401,49 @@ class ReviewPublishService:
                         "message": current_block,
                         "retry_class": "fatal",
                     }
-                    error = {"target_chat_id": target, **summary}
-                    per_target[str(target)] = {"ok": False, "error": summary}
+                    error = {"target_chat_id": target.chat_id, **summary}
+                    key = (
+                        str(target.chat_id)
+                        if target.target_backend == TargetBackend.TELEGRAM
+                        else f"safew:{target.chat_id}"
+                    )
+                    per_target[key] = {"ok": False, "error": summary}
                     errors.append(error)
                     routing_errors.append(error)
                     break
-                if int(target) not in current_targets:
+                if target.id not in {route.id for route in current_routes}:
                     summary = {
                         "exception_type": "RoutingChanged",
                         "message": "target is no longer enabled and bound to this review source",
                         "retry_class": "fatal",
                     }
-                    error = {"target_chat_id": target, **summary}
-                    per_target[str(target)] = {"ok": False, "error": summary}
+                    error = {"target_chat_id": target.chat_id, **summary}
+                    key = (
+                        str(target.chat_id)
+                        if target.target_backend == TargetBackend.TELEGRAM
+                        else f"safew:{target.chat_id}"
+                    )
+                    per_target[key] = {"ok": False, "error": summary}
                     errors.append(error)
                     routing_errors.append(error)
                     continue
 
                 message.target_chat_ids = list(current_targets)
                 message.target_chat_id = current_targets[0]
+                key = (
+                    str(target.chat_id)
+                    if target.target_backend == TargetBackend.TELEGRAM
+                    else f"safew:{target.chat_id}"
+                )
                 try:
-                    ids = await self.publisher.publish(message, int(target))
+                    ids = await self._publish_target(message, target)
                     all_ids.extend(ids)
-                    per_target[str(target)] = {"ok": True, "message_ids": ids}
+                    per_target[key] = {"ok": True, "message_ids": ids}
                     published_count += 1
                 except Exception as exc:  # noqa: BLE001
                     summary = exception_summary(exc)
-                    per_target[str(target)] = {"ok": False, "error": summary}
-                    error = {"target_chat_id": target, **summary}
+                    per_target[key] = {"ok": False, "error": summary}
+                    error = {"target_chat_id": target.chat_id, **summary}
                     errors.append(error)
                     send_errors.append(error)
             if published_count == 0 and routing_errors and not send_errors:
@@ -363,6 +454,7 @@ class ReviewPublishService:
                     detail={
                         "stage": "pre_send_target_validation",
                         "snapshot_target_chat_ids": snapshot_targets,
+                        "snapshot_target_destination_ids": snapshot_destination_ids,
                         "routing_errors": routing_errors,
                     },
                 )
