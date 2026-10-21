@@ -51,6 +51,53 @@ class SourceChannel(Base):
     )
 
 
+class IngestSource(Base):
+    """Independent ingress credential; revocation keeps its source and receipts."""
+
+    __tablename__ = "ingest_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("source_channels.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_access_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class IngestReceipt(Base):
+    __tablename__ = "ingest_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id", "conversation_id", "external_message_id", name="uq_ingest_message"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("source_channels.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    conversation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    external_message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class TargetChannel(Base):
     __tablename__ = "target_channels"
     __table_args__ = (

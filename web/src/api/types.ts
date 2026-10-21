@@ -1,5 +1,5 @@
 export type Role = 'viewer' | 'reviewer' | 'super_admin'
-export type SourceBackend = 'telegram' | 'safew'
+export type SourceBackend = 'telegram' | 'safew' | 'api'
 
 export interface User {
   id: number
@@ -87,6 +87,10 @@ export interface ReviewTask {
   source_chat_id: number
   source_message_id: number
   source_title?: string | null
+  sender?: string | null
+  conversation_id?: string | null
+  conversation_name?: string | null
+  external_message_id?: string | null
   target_chat_id: number | null
   target_chat_ids?: number[] | null
   original_text: string

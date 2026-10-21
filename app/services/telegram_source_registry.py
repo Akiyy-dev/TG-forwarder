@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.models import SourceChannel
-from app.source_backends import is_safew_chat_id
+from app.source_backends import source_backend_for_chat_id
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ async def load_telegram_source_snapshot(
     telegram_rows = [
         (int(chat_id), bool(enabled))
         for chat_id, enabled in rows
-        if not is_safew_chat_id(int(chat_id))
+        if source_backend_for_chat_id(int(chat_id)) == "telegram"
     ]
     return TelegramSourceSnapshot(
         enabled_chat_ids=frozenset(chat_id for chat_id, enabled in telegram_rows if enabled),

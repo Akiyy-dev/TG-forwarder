@@ -7,6 +7,7 @@ import { ApiEndpointsPage } from './pages/ApiEndpointsPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { HistoryPage } from './pages/HistoryPage'
+import { IngestSourcesPage } from './pages/IngestSourcesPage'
 import { LogsPage } from './pages/LogsPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ReviewDetailPage } from './pages/ReviewDetailPage'
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/channels" element={<ChannelsPage />} />
+          <Route path="/ingest-sources" element={<IngestSourcesPage />} />
           <Route path="/api-endpoints" element={<ApiEndpointsPage />} />
           <Route path="/settings" element={<Navigate to="/settings/basic" replace />} />
           <Route path="/settings/:section" element={<SettingsPage />} />

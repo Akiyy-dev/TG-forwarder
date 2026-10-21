@@ -8,6 +8,7 @@ import {
   Stack,
   Table,
   Text,
+  TextInput,
   Title,
 } from '@mantine/core'
 import { useQuery } from '@tanstack/react-query'
@@ -38,19 +39,23 @@ export function HistoryPage() {
   const [page, setPage] = useState(1)
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [sender, setSender] = useState('')
+  const [conversationId, setConversationId] = useState('')
   const [detail, setDetail] = useState<HistoryItem | null>(null)
   const sources = useQuery({
     queryKey: ['channels', 'history-filter'],
     queryFn: () => listChannels({ page: 1, page_size: 100 }),
   })
   const history = useQuery({
-    queryKey: ['history', page, sourceId, status],
+    queryKey: ['history', page, sourceId, status, sender, conversationId],
     queryFn: () =>
       listHistory({
         page,
         page_size: 20,
         source_id: sourceId ? Number(sourceId) : undefined,
         status: status ?? undefined,
+        sender: sender || undefined,
+        conversation_id: conversationId || undefined,
       }),
   })
 
@@ -63,6 +68,18 @@ export function HistoryPage() {
         </Text>
       </div>
       <Group align="end">
+        <TextInput
+          label="发送者"
+          placeholder="精确匹配发送者"
+          value={sender}
+          onChange={(event) => { setSender(event.currentTarget.value); setPage(1) }}
+        />
+        <TextInput
+          label="会话 ID"
+          placeholder="精确匹配会话 ID"
+          value={conversationId}
+          onChange={(event) => { setConversationId(event.currentTarget.value); setPage(1) }}
+        />
         <Select
           label="来源频道"
           placeholder="全部来源"
@@ -98,6 +115,7 @@ export function HistoryPage() {
           <Table.Tr>
             <Table.Th>来源</Table.Th>
             <Table.Th>消息 ID</Table.Th>
+            <Table.Th>会话 / 发送者</Table.Th>
             <Table.Th>状态</Table.Th>
             <Table.Th>处理后内容</Table.Th>
             <Table.Th>投递</Table.Th>
@@ -114,7 +132,11 @@ export function HistoryPage() {
                   <Text size="sm">{item.source_title || item.source_chat_id}</Text>
                 </Group>
               </Table.Td>
-              <Table.Td>{item.source_message_id}</Table.Td>
+              <Table.Td>{item.external_message_id || item.source_message_id}</Table.Td>
+              <Table.Td>
+                <Text size="sm">{item.conversation_name || item.conversation_id || '-'}</Text>
+                <Text size="xs" c="dimmed">{item.sender || '-'}</Text>
+              </Table.Td>
               <Table.Td>
                 <Badge variant="light" color={item.status === 'failed' ? 'red' : undefined}>
                   {messageStatusLabel(item.status)}
@@ -140,7 +162,7 @@ export function HistoryPage() {
           ))}
           {!history.isLoading && (history.data?.items.length ?? 0) === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={7}>
+              <Table.Td colSpan={8}>
                 <Text c="dimmed">暂无历史记录</Text>
               </Table.Td>
             </Table.Tr>
@@ -159,6 +181,11 @@ export function HistoryPage() {
         {detail && (
           <Stack gap="xs">
             <Text size="sm">来源：{detail.source_title || detail.source_chat_id}</Text>
+            {detail.sender && <Text size="sm">发送者：{detail.sender}</Text>}
+            {detail.conversation_id && (
+              <Text size="sm">会话：{detail.conversation_name || detail.conversation_id}（{detail.conversation_id}）</Text>
+            )}
+            {detail.external_message_id && <Text size="sm">原始消息 ID：{detail.external_message_id}</Text>}
             <Text size="sm">状态：{messageStatusLabel(detail.status)}</Text>
             <Text size="sm">接收时间：{dateTime(detail.received_at)}</Text>
             <Text size="sm">发布时间：{dateTime(detail.published_at)}</Text>

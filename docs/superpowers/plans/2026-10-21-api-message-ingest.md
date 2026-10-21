@@ -1,6 +1,6 @@
 # Text Message Ingestion Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Receive captured text with sender/conversation identity and release the verified implementation.
 
@@ -33,10 +33,10 @@
 
 **Interfaces:** Expose management and public routes exactly as specified in the spec. Store sender, conversation_id, conversation_name and external_message_id in normalized raw_metadata. Internal receipt ID is source_message_id.
 
-- [ ] Write/run failing tests for creation, token auth, validation, idempotency/conflict, concurrent retry, queue failure and conversation isolation.
-- [ ] Implement models/migration/service/routes and pipeline/source backend changes.
-- [ ] Verify targeted tests and static checks; report exact evidence.
-- [ ] Independent task review and fixes before final integration.
+- [x] Write/run failing tests for creation, token auth, validation, idempotency/conflict, concurrent retry, queue failure and conversation isolation.
+- [x] Implement models/migration/service/routes and pipeline/source backend changes.
+- [x] Verify targeted tests and static checks; report exact evidence.
+- [x] Independent task review and fixes before final integration.
 
 ### Task 2: Management UI
 
@@ -44,9 +44,9 @@
 
 **Interfaces:** Consume Task 1 management routes. Use source_id for existing route configuration; do not let users supply internal routing in message JSON.
 
-- [ ] Implement usable loading/error/empty states, creation, one-time token display, rotation, toggling/revocation, endpoint/example and source link.
-- [ ] Add API backend label and ensure Telegram-only actions are hidden for API sources.
-- [ ] Run frontend lint/build and independent task review.
+- [x] Implement usable loading/error/empty states, creation, one-time token display, rotation, toggling/revocation, endpoint/example and source link.
+- [x] Add API backend label and ensure Telegram-only actions are hidden for API sources.
+- [x] Run frontend lint/build and independent task review.
 
 ### Task 3: Identity presentation and end-to-end integration
 
@@ -54,10 +54,10 @@
 
 **Interfaces:** Read identity from normalized raw_metadata, expose nullable sender/conversation_id/conversation_name/external_message_id fields in history/review/public output; exact history filters.
 
-- [ ] Write failing tests for metadata propagation, filters, review approval and API-only publishing.
-- [ ] Implement metadata exposure and identity/filter UI; document HTTP contract, retries, route prerequisites and deployment migrations.
-- [ ] Run all CI-equivalent checks and migration verification; fix all failures.
-- [ ] Broad independent branch review; resolve material findings.
+- [x] Write failing tests for metadata propagation, filters, review approval and API-only publishing.
+- [x] Implement metadata exposure and identity/filter UI; document HTTP contract, retries, route prerequisites and deployment migrations.
+- [x] Run all CI-equivalent checks and migration verification; fix all failures.
+- [x] Broad independent branch review; resolve material findings.
 
 ### Task 4: Merge, release and image verification
 

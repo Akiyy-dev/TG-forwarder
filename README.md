@@ -1,13 +1,14 @@
 # TG-forwarder
 
-TG-forwarder 是一个带 Web 管理后台的消息处理与转发系统。它使用 Telegram 用户账号或
-SafeW Linux 客户端接收消息，依次执行去重、文本处理、关键词规则和人工审核，最终发布
-到 Telegram 或 SafeW 频道，也可交付给带 Token 的对外拉取 API。
+TG-forwarder 是一个带 Web 管理后台的消息处理与转发系统。它使用 Telegram 用户账号、
+SafeW Linux 客户端或 HTTP 文字接入 API 接收消息，依次执行去重、文本处理、关键词规则和
+人工审核，最终发布到 Telegram 或 SafeW 频道，也可交付给带 Token 的对外拉取 API。
 
 ## 主要能力
 
 - Telegram 用户账号监听：支持账号本身有权访问的公开或私密频道、群组；
 - SafeW 通知监听：在 Linux 轻量桌面中运行 SafeW，通过桌面通知获取新消息；
+- 文字消息接入：独立接入 Token、持久化幂等回执，保留发送者与会话身份；
 - Web 管理：来源与目标绑定、规则管理、审核、消息历史、API 目标和系统状态；
 - 多种发布模式：自动发布、人工审核、规则决定和暂停；
 - 多目标路由：一个来源可同时绑定多个 Telegram、SafeW Bot 和 API 目标；
@@ -20,7 +21,8 @@ SafeW Linux 客户端接收消息，依次执行去重、文本处理、关键�
 ```text
 Telegram 用户账号 ─> telegram-receiver ─┐
                                          ├─> Redis Streams ─> sender
-SafeW 桌面通知 ─────> safew-receiver ────┘                    │
+SafeW 桌面通知 ─────> safew-receiver ────┤                    │
+采集软件 ─> 文字接入 API ─> web ────────┘                    │
                                                                ├─> 规则 / 审核
 浏览器 ─> web ─> PostgreSQL <──────────────────────────────────┤
                                                                ├─> Telegram Bot 目标
@@ -85,9 +87,30 @@ curl -H 'Authorization: Bearer YOUR_TOKEN' \
 
 完整请求、响应、认证和错误说明见 [API 文档](docs/api.md)。
 
+## 文字消息接入
+
+在“消息接入”创建来源并保存只显示一次的接入 Token，然后进入“配置来源路由”绑定发送目标。
+新来源默认使用人工审核模式。接入 Token 与“对外 API”的拉取 Token、Web 登录凭据分别独立。
+
+```bash
+curl -X POST 'https://example.com/api/ingest/v1/messages' \
+  -H 'Authorization: Bearer YOUR_INGEST_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{"message_id":"capture-000001","conversation_id":"group-001","conversation_name":"项目讨论群","sender":"Alice","text":"采集到的消息内容"}'
+```
+
+v1 只接收文字，不接收图片或附件。发送者与会话身份保留在历史、审核详情和对外 API 的
+独立字段中，不会自动拼接到转发正文。`202` 表示已入队；重复消息返回原回执（已入队时为
+`200`），相同幂等键下修改内容会返回 `409`。网络错误或 `503` 时应使用相同
+`conversation_id`、`message_id` 和原内容重试，发布结果需在消息历史中确认。
+
+升级时需先完成数据库迁移 `0010_api_ingest`（`alembic upgrade head`），再启动新版业务服务；
+Compose 可执行 `docker compose run --rm migrate`。请求字段、凭据管理和失败重试方式见
+[API 文档](docs/api.md#4-消息接入-api)。
+
 ## 文档
 
-1. [API 文档](docs/api.md)：公开消息 API、Web 管理 API、认证和响应格式；
+1. [API 文档](docs/api.md)：公开消息 API、文字接入 API、Web 管理 API、认证和响应格式；
 2. [部署文档](docs/deployment.md)：Compose、本地运行、SafeW、升级、备份和反向代理；
 3. [使用指南](docs/user-guide.md)：频道、发布模式、规则、审核、历史和 API 目标；
 4. [配置参考](docs/configuration.md)：两个环境变量模板的区别及各配置项；

@@ -37,6 +37,15 @@ async def _accept_or_register_source(
     """Accept Web-managed Telegram sources and auto-register SafeW conversations."""
 
     message = event.message
+    if event.backend == "api":
+        # The Web process can create a source immediately after our periodic
+        # refresh. Consult persisted sources before acknowledging this event.
+        await channel_service.load_from_db()
+        if message.source_chat_id in channel_service.configured_chat_ids:
+            return True
+        logger.warning("unknown_api_source_ignored", source_chat_id=message.source_chat_id)
+        return False
+
     if message.source_chat_id in channel_service.configured_chat_ids:
         return True
 

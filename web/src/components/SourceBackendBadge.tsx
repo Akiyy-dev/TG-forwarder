@@ -11,7 +11,7 @@ export function SourceBackendBadge({ backend, size = 'sm' }: SourceBackendBadgeP
   const isSafeW = backend === 'safew'
 
   return (
-    <Badge color={isSafeW ? 'violet' : backend === 'telegram' ? 'blue' : 'gray'} variant="light" size={size}>
+    <Badge color={isSafeW ? 'violet' : backend === 'telegram' ? 'blue' : backend === 'api' ? 'teal' : 'gray'} variant="light" size={size}>
       {sourceBackendLabel(backend)}
     </Badge>
   )

@@ -49,6 +49,7 @@ def message_from_task(task: ReviewTask) -> NormalizedMessage:
         media_type=MediaType(task.media_type or MediaType.TEXT.value),
         media_items=items,
         album_message_ids=list(snap.get("album_message_ids") or []),
+        raw_metadata=dict(snap.get("raw_metadata") or {}),
         target_chat_id=task.target_chat_id,
     )
 
@@ -251,9 +252,7 @@ class ReviewPublishService:
         elif claimed.target_chat_id is not None:
             snapshot_targets = [int(claimed.target_chat_id)]
         snapshot_api_targets = [int(value) for value in (claimed.target_api_endpoint_ids or [])]
-        snapshot_destination_ids = [
-            int(value) for value in (claimed.target_destination_ids or [])
-        ]
+        snapshot_destination_ids = [int(value) for value in (claimed.target_destination_ids or [])]
 
         # Ensure processed_message not already published (idempotency)
         async with self.session_factory() as session:

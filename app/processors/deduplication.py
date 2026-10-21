@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from app.schemas.message import NormalizedMessage, ProcessingContext, ProcessResult
+from app.source_backends import is_api_chat_id
 from app.utils.text import content_fingerprint
 
 LookupFn = Callable[[str], Awaitable[bool]]
@@ -24,6 +25,10 @@ class DeduplicationProcessor:
 
     @staticmethod
     def compute_hash(message: NormalizedMessage) -> str:
+        if is_api_chat_id(message.source_chat_id):
+            # Receipts enforce API transport identity. Captures with identical
+            # text in independent conversations must each reach the pipeline.
+            return content_fingerprint(f"api:{message.source_chat_id}:{message.source_message_id}")
         media_keys: list[str] = []
         for item in message.media_items:
             key = item.file_unique_id or item.file_id
