@@ -18,6 +18,7 @@ from app.api.routes import auth as auth_routes
 from app.api.routes import channels as channels_routes
 from app.api.routes import dashboard as dashboard_routes
 from app.api.routes import history as history_routes
+from app.api.routes import ingest as ingest_routes
 from app.api.routes import media as media_routes
 from app.api.routes import reviews as reviews_routes
 from app.api.routes import rules as rules_routes
@@ -87,6 +88,8 @@ def create_api_app(ctx: AppContext) -> FastAPI:
     app.include_router(auth_routes.router, prefix="/api/v1")
     app.include_router(api_destination_routes.router, prefix="/api/v1")
     app.include_router(api_destination_routes.public_router)
+    app.include_router(ingest_routes.router, prefix="/api/v1")
+    app.include_router(ingest_routes.public_router)
     app.include_router(users_routes.router, prefix="/api/v1")
     app.include_router(reviews_routes.router, prefix="/api/v1")
     app.include_router(media_routes.router, prefix="/api/v1")

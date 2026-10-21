@@ -17,6 +17,7 @@ from app.database.models import ContentRevision, ReviewAction, ReviewTask
 from app.review.publish import ReviewPublishService
 from app.review.service import ReviewConflictError, ReviewService
 from app.review.state_machine import IllegalTransitionError, ReviewActionType, ReviewStatus
+from app.services.message_identity import message_identity
 from app.source_backends import source_backend_for_chat_id
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
@@ -31,6 +32,10 @@ class ReviewOut(APIModel):
     source_message_id: int
     source_backend: str = "telegram"
     source_title: str | None = None
+    sender: str | None = None
+    conversation_id: str | None = None
+    conversation_name: str | None = None
+    external_message_id: str | None = None
     target_chat_id: int | None
     target_chat_ids: list[int] | None = None
     original_text: str
@@ -49,8 +54,10 @@ class ReviewOut(APIModel):
 
 
 def _enrich_review(ctx: AppContext, row: Any) -> ReviewOut:
+    snapshot = row.media_snapshot if isinstance(row.media_snapshot, dict) else {}
     return ReviewOut.model_validate(row).model_copy(
         update={
+            **message_identity(snapshot.get("raw_metadata")),
             "source_title": ctx.channel_service.display_name(int(row.source_chat_id)),
             "target_chat_ids": getattr(row, "target_chat_ids", None),
             "source_backend": source_backend_for_chat_id(int(row.source_chat_id)),
@@ -59,7 +66,7 @@ def _enrich_review(ctx: AppContext, row: Any) -> ReviewOut:
 
 
 class EditReviewRequest(APIModel):
-    content: str = Field(max_length=4096)
+    content: str = Field(max_length=65536)
     expected_revision: int = Field(ge=1)
 
 

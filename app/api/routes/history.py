@@ -12,6 +12,7 @@ from app.api.pagination import PageParams, build_page
 from app.api.schemas import Envelope
 from app.context import AppContext
 from app.database.models import ApiDelivery, ProcessedMessage, SourceChannel
+from app.services.message_identity import message_identity
 from app.source_backends import source_backend_for_chat_id
 
 router = APIRouter(tags=["history"])
@@ -27,6 +28,7 @@ def _item(
         "source_message_id": row.source_message_id,
         "source_backend": source_backend_for_chat_id(int(row.source_chat_id)),
         "source_title": source.title if source else None,
+        **message_identity(payload.get("raw_metadata")),
         "status": row.status,
         "text": payload.get("text"),
         "media_type": payload.get("media_type", "text"),
@@ -53,6 +55,8 @@ async def list_history(
     page_size: int = Query(20, ge=1, le=100),
     source_id: int | None = Query(None, ge=1),
     status: str | None = None,
+    sender: str | None = Query(None, max_length=256),
+    conversation_id: str | None = Query(None, max_length=128),
 ) -> Envelope[dict[str, Any]]:
     params = PageParams(page=page, page_size=page_size)
     delivery_count = (
@@ -75,6 +79,11 @@ async def list_history(
     if status:
         count_stmt = count_stmt.where(ProcessedMessage.status == status)
         list_stmt = list_stmt.where(ProcessedMessage.status == status)
+    for key, value in (("sender", sender), ("conversation_id", conversation_id)):
+        if value is not None:
+            clause = ProcessedMessage.processing_result["raw_metadata"][key].as_string() == value
+            count_stmt = count_stmt.where(clause)
+            list_stmt = list_stmt.where(clause)
     async with ctx.session_factory() as session:
         total = int((await session.execute(count_stmt)).scalar_one())
         rows = (

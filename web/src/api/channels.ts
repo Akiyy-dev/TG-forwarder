@@ -69,6 +69,10 @@ export async function createChannel(body: {
   return apiRequest('/api/v1/channels', { method: 'POST', body: JSON.stringify(body) })
 }
 
+export async function getChannel(id: number): Promise<SourceChannel> {
+  return apiRequest(`/api/v1/channels/${id}`)
+}
+
 export async function patchChannel(
   id: number,
   body: Partial<{

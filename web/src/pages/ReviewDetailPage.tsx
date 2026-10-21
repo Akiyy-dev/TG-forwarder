@@ -186,13 +186,17 @@ export function ReviewDetailPage() {
             <Badge variant="outline">版本 {task.revision}</Badge>
           </Group>
           <Text c="dimmed" size="sm" title={`来源 ID ${task.source_chat_id}`}>
-            来源 {task.source_title || task.source_chat_id}/{task.source_message_id}
+            来源 {task.source_title || task.source_chat_id}/{task.external_message_id || task.source_message_id}
             {task.target_chat_ids?.length
               ? ` → ${task.target_chat_ids.join(', ')}`
               : task.target_chat_id
                 ? ` → ${task.target_chat_id}`
                 : ''}
           </Text>
+          {task.sender && <Text size="sm">发送者：{task.sender}</Text>}
+          {task.conversation_id && (
+            <Text size="sm">会话：{task.conversation_name || task.conversation_id}（{task.conversation_id}）</Text>
+          )}
         </div>
         <Button component={Link} to="/reviews" variant="default">
           返回列表
@@ -247,11 +251,11 @@ export function ReviewDetailPage() {
             }}
             minRows={12}
             autosize
-            maxLength={4096}
+            maxLength={task.source_backend === 'api' ? 65536 : 4096}
             disabled={!canEdit}
           />
           <Text size="xs" c="dimmed" mt={4}>
-            {draft.length} / 4096
+            {draft.length} / {task.source_backend === 'api' ? 65536 : 4096}
           </Text>
           {writable && canEdit && (
             <Group mt="sm">

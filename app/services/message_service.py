@@ -7,9 +7,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, cast
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.database.models import ProcessedMessage, ReviewTask
 from app.database.repositories.message_repo import MessageRepository
 from app.database.repositories.settings_repo import SettingsRepository
 from app.logging import get_logger
@@ -29,7 +31,7 @@ from app.services.channel_service import ChannelService
 from app.services.history_service import HistoryService
 from app.services.media_service import MediaService
 from app.services.retry_service import exception_summary
-from app.source_backends import source_backend_for_chat_id
+from app.source_backends import is_api_chat_id, source_backend_for_chat_id
 
 logger = get_logger(__name__)
 
@@ -215,6 +217,9 @@ class MessageService:
                         primary = record
                 elif mid == message.source_message_id:
                     existing = await repo.get_by_source(message.source_chat_id, mid)
+                    if existing and await self._api_review_owned(session, existing):
+                        await session.commit()
+                        return False
                     if existing and existing.status in {
                         MessageStatus.PUBLISHED.value,
                         MessageStatus.FILTERED.value,
@@ -276,6 +281,16 @@ class MessageService:
             finally:
                 self.queue.task_done()
 
+    async def _api_review_owned(self, session: AsyncSession, record: ProcessedMessage) -> bool:
+        if not is_api_chat_id(record.source_chat_id):
+            return False
+        task_id = (
+            await session.execute(
+                select(ReviewTask.id).where(ReviewTask.processed_message_id == record.id)
+            )
+        ).scalar_one_or_none()
+        return task_id is not None
+
     async def process_one(self, item: QueueItem) -> None:
         message = item.message
         # Incoming stream events and locally queued retries can outlive the
@@ -300,6 +315,15 @@ class MessageService:
                 await session.commit()
                 return
             if record.status == MessageStatus.PUBLISHED.value:
+                await session.commit()
+                return
+            if is_api_chat_id(message.source_chat_id) and (
+                record.status == MessageStatus.FILTERED.value
+                or await self._api_review_owned(session, record)
+            ):
+                # Transport redelivery cannot replace a reviewer's content or
+                # revisit an existing review/filter decision under newer rules.
+                # A pending_review row without a task still recovers normally.
                 await session.commit()
                 return
             if routing_block is not None:
@@ -452,9 +476,7 @@ class MessageService:
                 )
                 target_destination_ids = [
                     route.id
-                    for route in self.channel_service.get_target_routes_for(
-                        message.source_chat_id
-                    )
+                    for route in self.channel_service.get_target_routes_for(message.source_chat_id)
                 ]
                 await self.review_service.create_from_message(
                     processed=record,
@@ -721,6 +743,10 @@ class MessageService:
             count = 0
             for record in records:
                 if record.target_message_ids:
+                    continue
+                if await self._api_review_owned(session, record):
+                    # Review publication retries use their saved final text and
+                    # state machine, rather than re-running the capture rules.
                     continue
                 msg = self._message_from_record(record)
                 if msg is None:

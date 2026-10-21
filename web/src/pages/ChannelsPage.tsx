@@ -1,4 +1,5 @@
 import {
+  Alert,
   Badge,
   Button,
   Checkbox,
@@ -17,6 +18,7 @@ import {
 } from '@mantine/core'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { listApiEndpoints } from '../api/apiEndpoints'
 import {
@@ -25,6 +27,7 @@ import {
   createChannel,
   createTarget,
   deleteChannel,
+  getChannel,
   listAccountChannels,
   listChannels,
   listTargets,
@@ -54,6 +57,9 @@ export function ChannelsPage() {
   const { data: user } = useMe()
   const isAdmin = user?.role === 'super_admin'
   const qc = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedSource = Number(searchParams.get('source_id'))
+  const focusedSourceId = Number.isSafeInteger(requestedSource) && requestedSource > 0 ? requestedSource : null
   const [sourceOpen, setSourceOpen] = useState(false)
   const [targetOpen, setTargetOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
@@ -74,6 +80,14 @@ export function ChannelsPage() {
     queryKey: ['targets'],
     queryFn: () => listTargets(),
   })
+  const focusedSource = useQuery({
+    queryKey: ['channels', 'source', focusedSourceId],
+    queryFn: () => getChannel(focusedSourceId!),
+    enabled: focusedSourceId !== null,
+  })
+  const displayedSources = focusedSourceId !== null
+    ? focusedSource.data ? [focusedSource.data] : []
+    : sources.data?.items ?? []
   const apiEndpoints = useQuery({
     queryKey: ['api-endpoints'],
     queryFn: () => listApiEndpoints(),
@@ -205,6 +219,16 @@ export function ChannelsPage() {
 
         <Tabs.Panel value="sources" pt="md">
           <Stack>
+            {focusedSourceId !== null && (
+              <Alert color={focusedSource.isError ? 'red' : 'blue'}>
+                <Group justify="space-between">
+                  <Text size="sm">
+                    {focusedSource.isPending ? '正在加载来源路由…' : focusedSource.isError ? '无法加载该来源，请确认来源仍然存在' : `正在配置来源 #${focusedSourceId}`}
+                  </Text>
+                  <Button variant="subtle" size="xs" onClick={() => setSearchParams({})}>查看全部来源</Button>
+                </Group>
+              </Alert>
+            )}
             {isAdmin && (
               <Button w={160} onClick={() => setSourceOpen(true)}>
                 添加来源
@@ -224,7 +248,7 @@ export function ChannelsPage() {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {(sources.data?.items ?? []).map((ch) => (
+                {displayedSources.map((ch) => (
                   <Table.Tr key={ch.id}>
                     <Table.Td>{ch.title || ch.username || '-'}</Table.Td>
                     <Table.Td>
@@ -232,7 +256,7 @@ export function ChannelsPage() {
                     </Table.Td>
                     <Table.Td>{ch.chat_id}</Table.Td>
                     <Table.Td>
-                      {ch.source_backend === 'safew' ? (
+                      {ch.source_backend !== 'telegram' ? (
                         <Badge color="gray" variant="light">
                           不适用
                         </Badge>
@@ -353,6 +377,11 @@ export function ChannelsPage() {
                     </Table.Td>
                     {isAdmin && (
                       <Table.Td>
+                        {ch.source_backend === 'api' ? (
+                          <Button component={Link} to="/ingest-sources" size="xs" variant="subtle">
+                            管理接入凭据
+                          </Button>
+                        ) : (
                         <Button
                           size="xs"
                           color="red"
@@ -367,6 +396,7 @@ export function ChannelsPage() {
                         >
                           删除
                         </Button>
+                        )}
                       </Table.Td>
                     )}
                   </Table.Tr>

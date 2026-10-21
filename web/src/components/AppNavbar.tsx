@@ -7,6 +7,7 @@ const items = [
   { label: '消息历史', to: '/history' },
   { label: '规则管理', to: '/rules' },
   { label: '频道管理', to: '/channels' },
+  { label: '消息接入', to: '/ingest-sources' },
   { label: '对外 API', to: '/api-endpoints' },
   { label: '设置', to: '/settings/basic' },
   { label: '系统状态', to: '/system' },

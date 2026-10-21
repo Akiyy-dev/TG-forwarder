@@ -20,7 +20,7 @@ from app.database.repositories.channel_repo import ChannelRepository
 from app.logging import get_logger
 from app.schemas.channel import PublishMode, SourceChannelConfig, TargetBackend, TargetRoute
 from app.services.telegram_account import check_channel_accessible, list_broadcast_channels
-from app.source_backends import is_safew_chat_id
+from app.source_backends import source_backend_for_chat_id
 
 logger = get_logger(__name__)
 
@@ -165,9 +165,7 @@ class ChannelService:
             t.chat_id: (t.title or (f"@{t.username}" if t.username else str(t.chat_id)))
             for t in targets
         }
-        self._target_routes = {
-            ch.chat_id: list(target_map.get(ch.id, [])) for ch in channels
-        }
+        self._target_routes = {ch.chat_id: list(target_map.get(ch.id, [])) for ch in channels}
 
     async def load_from_db(self) -> None:
         async with self.session_factory() as session:
@@ -203,7 +201,9 @@ class ChannelService:
                     publish_mode=(
                         None if existing is not None else (mode or PublishMode.REVIEW.value)
                     ),
-                    access_status=("ok" if is_safew_chat_id(chat_id) else None),
+                    access_status=(
+                        "ok" if source_backend_for_chat_id(chat_id) != "telegram" else None
+                    ),
                 )
             await session.commit()
         await self.load_from_db()
@@ -309,7 +309,7 @@ class ChannelService:
                 channel.title = data["title"]
             if "enabled" in data:
                 want = bool(data["enabled"])
-                if want and is_safew_chat_id(channel.chat_id):
+                if want and source_backend_for_chat_id(channel.chat_id) != "telegram":
                     channel.access_status = "ok"
                 elif want and (channel.access_status or "unknown") == "missing":
                     # Re-verify if client available
@@ -552,7 +552,7 @@ class ChannelService:
         username: str | None = None,
     ) -> dict[str, Any]:
         """Resolve source access without probing SafeW ids through Telegram."""
-        if is_safew_chat_id(chat_id):
+        if source_backend_for_chat_id(chat_id) != "telegram":
             return {"status": "ok", "username": username, "title": None, "chat_id": chat_id}
         return await self._resolve_access(client, chat_id=chat_id, username=username)
 
@@ -669,9 +669,7 @@ class ChannelService:
                     )
                 valid_api_ids.append(endpoint_id)
             await session.execute(
-                delete(SourceApiEndpointLink).where(
-                    SourceApiEndpointLink.source_id == source_id
-                )
+                delete(SourceApiEndpointLink).where(SourceApiEndpointLink.source_id == source_id)
             )
             for endpoint_id in valid_api_ids:
                 session.add(
@@ -779,7 +777,7 @@ class ChannelService:
             async with self.session_factory() as session:
                 repo = ChannelRepository(session)
                 for ch in await repo.list_all():
-                    if is_safew_chat_id(ch.chat_id):
+                    if source_backend_for_chat_id(ch.chat_id) != "telegram":
                         if ch.access_status != "ok":
                             ch.access_status = "ok"
                             updated += 1
@@ -836,9 +834,7 @@ class ChannelService:
                 chat = await safew_publisher.get_chat(chat_id)
                 permissions = chat.get("permissions")
                 can_send = (
-                    permissions.get("can_send_messages")
-                    if isinstance(permissions, dict)
-                    else None
+                    permissions.get("can_send_messages") if isinstance(permissions, dict) else None
                 )
                 status = "ok" if can_send is not False else "missing"
                 detail = {

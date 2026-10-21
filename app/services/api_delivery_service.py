@@ -18,6 +18,7 @@ from app.database.models import (
     SourceChannel,
 )
 from app.schemas.message import NormalizedMessage
+from app.services.message_identity import message_identity
 from app.source_backends import source_backend_for_chat_id
 
 
@@ -124,6 +125,7 @@ class ApiDeliveryService:
             "source_chat_id": message.source_chat_id,
             "source_message_id": message.source_message_id,
             "source_chat_username": message.source_chat_username,
+            **message_identity(message.raw_metadata),
             "grouped_id": message.grouped_id,
             "text": message.text,
             "media_type": message.media_type.value,

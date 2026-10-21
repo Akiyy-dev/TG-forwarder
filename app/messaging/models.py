@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 from app.schemas.message import (
     ForwardInfo,
@@ -15,9 +15,9 @@ from app.schemas.message import (
     MessageEntity,
     NormalizedMessage,
 )
+from app.source_backends import SourceBackend as SourceBackend
 
 EVENT_SCHEMA_VERSION = 1
-SourceBackend = Literal["telegram", "safew"]
 
 
 def _datetime(value: str | datetime | None) -> datetime | None:

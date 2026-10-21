@@ -190,9 +190,10 @@ async def test_safew_target_and_unified_destination_binding(
 
         refreshed = await client.get(f"/api/v1/channels/{source['id']}")
         assert refreshed.json()["data"]["target_ids"] == linked.json()["data"]["target_ids"]
-        assert refreshed.json()["data"]["api_endpoint_ids"] == linked.json()["data"][
-            "api_endpoint_ids"
-        ]
+        assert (
+            refreshed.json()["data"]["api_endpoint_ids"]
+            == linked.json()["data"]["api_endpoint_ids"]
+        )
 
 
 async def test_publish_mode_review_and_paused(

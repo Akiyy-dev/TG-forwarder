@@ -391,6 +391,7 @@ class ReviewService:
     @staticmethod
     def media_snapshot_from_message(message: NormalizedMessage) -> dict[str, Any]:
         return {
+            "raw_metadata": dict(message.raw_metadata),
             "media_type": message.media_type.value,
             "album_message_ids": message.album_message_ids,
             "media_items": [

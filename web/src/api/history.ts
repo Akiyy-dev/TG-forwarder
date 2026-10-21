@@ -7,6 +7,10 @@ export interface HistoryItem {
   source_message_id: number
   source_backend: SourceBackend
   source_title: string | null
+  sender: string | null
+  conversation_id: string | null
+  conversation_name: string | null
+  external_message_id: string | null
   status: string
   text: string | null
   media_type: string
@@ -29,12 +33,16 @@ export async function listHistory(params: {
   page_size?: number
   source_id?: number
   status?: string
+  sender?: string
+  conversation_id?: string
 } = {}): Promise<PageResult<HistoryItem>> {
   const qs = new URLSearchParams()
   if (params.page) qs.set('page', String(params.page))
   if (params.page_size) qs.set('page_size', String(params.page_size))
   if (params.source_id) qs.set('source_id', String(params.source_id))
   if (params.status) qs.set('status', params.status)
+  if (params.sender) qs.set('sender', params.sender)
+  if (params.conversation_id) qs.set('conversation_id', params.conversation_id)
   const query = qs.toString()
   return apiRequest(`/api/v1/history${query ? `?${query}` : ''}`)
 }

@@ -26,7 +26,7 @@ from app.review.service import ReviewService
 from app.services.channel_service import ChannelService
 from app.services.media_service import MediaService
 from app.services.message_service import MessageService
-from app.source_backends import is_safew_chat_id
+from app.source_backends import source_backend_for_chat_id
 from app.utils.files import ensure_dir
 
 logger = get_logger(__name__)
@@ -100,7 +100,7 @@ async def run_app() -> None:
 
     source_ids: set[int] = set()
     for chat_id in channel_service.enabled_chat_ids:
-        if is_safew_chat_id(chat_id):
+        if source_backend_for_chat_id(chat_id) != "telegram":
             continue
         source_ids.add(chat_id)
         s = str(chat_id)

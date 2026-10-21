@@ -2,7 +2,7 @@
 
 ## 1. 设计目标
 
-TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开，使 Telegram、SafeW 和 Web
+TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开，使 Telegram、SafeW 和 Web/API 接入
 可以独立升级或重启。系统同时保证：
 
 - 接收端尽快把事件持久化到 Redis，避免长时间处理阻塞监听；
@@ -17,7 +17,7 @@ TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开�
 
 | 服务 | 职责 | 不能做的事 |
 | --- | --- | --- |
-| `web` | FastAPI、React 静态页面、用户认证、管理 API、发布命令 | 不直接监听 Telegram，不直接调用 Bot 发布 |
+| `web` | FastAPI、React 静态页面、用户认证、管理 API、文字接入认证与入队、发布命令 | 不直接监听 Telegram，不直接调用 Bot 发布 |
 | `sender` | 处理器、规则、审核发布、Telegram/SafeW Bot、API 投递、恢复任务 | 不运行 SafeW 桌面，不维护 Telegram 用户监听连接 |
 | `telegram-receiver` | Telethon 用户会话、来源过滤、相册聚合、媒体下载 | 不执行最终规则和目标发布 |
 | `safew-receiver` | SafeW 桌面、D-Bus 通知捕获、来源标题和正文提取 | 不读取 SafeW 历史或官方 User API |
@@ -29,7 +29,7 @@ TG-forwarder 将“接收消息”“处理与发布”“管理界面”分开�
 
 | 服务 | 职责 |
 | --- | --- |
-| PostgreSQL | 用户、频道、目标、规则、处理状态、审核、历史和 API 投递 |
+| PostgreSQL | 用户、频道、目标、规则、处理状态、审核、历史、API 接入凭据/回执和 API 投递 |
 | Redis | 接收事件 Stream、Web 命令 Stream、业务进程心跳 |
 | `migrate` | 业务服务启动前执行 `alembic upgrade head`，成功后正常退出 |
 
@@ -65,6 +65,10 @@ Browser ── HTTP ──> web ── command stream ────────�
 Redis consumer group 使用显式确认。sender 处理失败时事件留在 pending 状态；超过 claim idle
 时间后可被重新认领。处理完成后事件才会 `XACK` 并从 Stream 删除。
 
+采集软件通过 `POST /api/ingest/v1/messages` 直接进入 `web`：验证独立接入 Token，持久化
+接收回执和规范化消息，再使用 `publish_incoming("api", ...)` 写入 incoming stream。单进程
+模式则交给 `MessageService.enqueue`。两种模式都复用现有规则、审核和发布管线。
+
 ## 4. 来源与路由
 
 ### 4.1 Telegram 来源
@@ -86,7 +90,17 @@ SafeW 通知以会话标题映射为内部来源。启用 `SAFEW_AUTO_REGISTER_S
 
 管理员必须在 Web 中确认标题和目标。
 
-### 4.3 目标
+### 4.3 API 来源
+
+超级管理员在“消息接入”创建凭据时同步创建独立来源，默认 `enabled=true`、
+`publish_mode=review`，尚未绑定目标。凭据与来源一对一，Token 决定来源；请求体不能指定
+内部来源或路由。凭据停用、过期、撤销或来源停用时均拒绝提交。
+
+API 来源聊天 ID 使用 `-2_000_000_000_000_000 < chat_id <= -1_000_000_000_000_000`
+命名空间，随机生成 48 位偏移，和 Telegram/SafeW 来源隔离。API 来源不会进入 Telegram
+订阅与可达性检查。sender 处理 API 事件时刷新来源配置，避免新来源因缓存过期而被忽略。
+
+### 4.4 目标
 
 一个来源可绑定：
 
@@ -154,6 +168,7 @@ publishing ───────────────> published
 - 媒体快照；
 - Telegram/SafeW 目标记录 ID 与聊天 ID 快照；
 - API 目标快照；
+- API 接入的发送者、会话 ID/名称与外部消息 ID；
 - 规则匹配、关键词和决策原因；
 - revision 版本号。
 
@@ -177,6 +192,8 @@ publishing ───────────────> published
 记录。
 
 API payload 是处理完成时的快照，并主动排除本地文件路径。当前媒体只提供元数据。
+API 接入的 `sender`、`conversation_id`、`conversation_name`、`external_message_id` 作为可空
+独立字段随历史、审核详情和公开投递返回；它们不会自动拼接到 `text` 中。
 
 ## 9. 幂等与恢复
 
@@ -184,12 +201,25 @@ API payload 是处理完成时的快照，并主动排除本地文件路径。�
 - 已发布记录再次入队时会被跳过；
 - 内容哈希只把已发布消息作为去重依据；
 - API delivery 有唯一约束；
+- API 接收回执以 `(接入来源, conversation_id, message_id)` 唯一；
 - 审核发布先原子 claim，减少并发重复发布；
 - sender 启动时恢复 `pending_publish`、`retrying`、`publishing` 等可恢复状态；
 - Redis 未确认事件会被重新认领。
 
 Telegram 外部 API 无法提供跨数据库与 Telegram 的分布式事务，因此极端崩溃窗口仍需要
 依靠幂等检查和人工历史核对。目标间采用尽力而为的部分成功策略。
+
+API 接收回执保留原始规范化负载及内容指纹。相同幂等键、相同内容返回原回执；改变正文、
+发送者、会话名称或提供的时间会冲突。省略的时间以“未提供”参与指纹计算，避免重试时
+服务器接收时间变化导致冲突。不同会话/发送者的独立 API 消息不因正文相同而合并。
+
+回执整数主键是管线内部 `source_message_id`，外部 `message_id` 留在 `raw_metadata` 中。
+结构化身份和规范化负载经过序列化、失败重试、恢复和人工批准后继续保留。
+
+只有队列接受事件才返回 `202`。已入队的相同请求返回 `200` 和 `duplicate=true`；队列不可用
+或结果不确定返回 `503`，客户端用原幂等键和内容重试。已保存但未成功入队的回执可重试入队；
+入队确认不确定时允许安全重投，后续消息登记负责抑制重复处理。回执的 `queued` 状态不表示
+已经发布，也不会因为下游路由失败而改变；修复路由后仍需使用现有失败任务重试流程。
 
 ## 10. 健康状态
 
@@ -208,8 +238,13 @@ Web 的系统状态读取这些心跳，并区分“队列确实为空”和“R
 - Telegram Bot Token 与 SafeW Bot Token 只在 sender 使用；
 - SafeW 登录资料只在 SafeW 卷中；
 - Web 密钥与管理员哈希只在 Web 使用；
-- 公共 API Token 只以哈希形式保存在 PostgreSQL；
+- 对外拉取 Token 与 API 接入 Token 相互独立，均只以 SHA-256 哈希和显示前缀保存在 PostgreSQL；
+- 接入 Token 只在创建/轮换时返回一次，Web 登录凭据不能替代接入认证；
 - Web/noVNC 默认只映射到宿主机回环地址。
 
 Compose 的职责拆分减少了密钥扩散，但宿主机 root、Docker daemon 与数据库管理员仍属于
 高权限安全边界，必须限制访问并定期备份。
+
+消息接入的持久化结构通过 Alembic `0010_api_ingest` 创建。升级时必须先完成
+`alembic upgrade head`，再启动新版 Web/sender；Compose 的 migrate 服务承担该步骤。
+撤销接入只删除凭据，保留来源、历史和接收回执。
