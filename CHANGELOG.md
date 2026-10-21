@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.5.0...v0.6.0) (2026-10-21)
+
+
+### Features
+
+* add authenticated text message ingestion ([#15](https://github.com/Akiyy-dev/TG-forwarder/issues/15)) ([fed85d1](https://github.com/Akiyy-dev/TG-forwarder/commit/fed85d1811f79cb716a9f479d5b7f819eb2868b6))
+
 ## [0.5.0](https://github.com/Akiyy-dev/TG-forwarder/compare/v0.4.1...v0.5.0) (2026-07-20)
 
 
